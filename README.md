@@ -11,6 +11,8 @@ So, in case mutliple edits occur, you'll get a conflict to resolve instead of cl
 
 This is just an API wrapper with a 3-way-merger bolted-on.
 
+THIS DEPENDS ON: https://github.com/basecamp/writebook/pull/482
+
 ---
 
 A git-inspired CLI for [Writebook](https://once.com/writebook). It clones a book
