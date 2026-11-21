@@ -92,12 +92,12 @@ impl Client {
             return Err(ApiError { status, body: Value::Null }.into());
         }
 
-        Ok(response
+        response
             .body_mut()
             .with_config()
             .limit(DOWNLOAD_LIMIT)
             .read_to_vec()
-            .with_context(|| format!("could not download {path}"))?)
+            .with_context(|| format!("could not download {path}"))
     }
 
     pub fn post_multipart(&mut self, path: &str, parts: &[Part]) -> Result<Value> {

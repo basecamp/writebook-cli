@@ -330,10 +330,7 @@ fn entry_changed(checkout: &Checkout, leaf: &LeafState, entry: &Entry) -> bool {
                 _ => working != base,
             }
         }
-        None => match &leaf.filename {
-            Some(_) => true,
-            None => false,
-        },
+        None => leaf.filename.is_some(),
     }
 }
 
