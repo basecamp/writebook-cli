@@ -119,6 +119,9 @@ pub fn writebook(args: &[&str], env: &[(&str, &str)]) -> Output {
     command
         .args(args)
         .env_remove("WRITEBOOK_TOKEN")
+        .env_remove("WRITEBOOK_TOKEN_HOST")
+        .env_remove("WRITEBOOK_NO_SIGN_IN")
+        .env_remove("CLAUDECODE")
         .env("XDG_CONFIG_HOME", &config)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

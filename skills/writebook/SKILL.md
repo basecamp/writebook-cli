@@ -56,14 +56,14 @@ writebook search <book-or-site-url> "query" [--json]   # matching pages, with li
 ```
 
 `read` accepts reading links, editing links and `.md` links. Published books
-need no sign-in. For private books, pass a token: `--token <token>` or
-`WRITEBOOK_TOKEN`.
+need no sign-in. For private books, set `WRITEBOOK_TOKEN` and
+`WRITEBOOK_TOKEN_HOST` (the site the token is for; it is never sent elsewhere).
 
 ## Running unattended
 
-Set `WRITEBOOK_TOKEN` (or pass `--token`). Without a token or a stored
-sign-in, commands that need one fail right away when nobody is at a terminal;
-they never wait for a browser approval.
+Set `WRITEBOOK_TOKEN` and `WRITEBOOK_TOKEN_HOST`. Without a token or a stored
+sign-in, commands that need one fail right away when nobody is at a terminal
+or an agent runs them; they never wait for a browser approval.
 
 To sign in with no terminal, use two steps: run `writebook login <site-url>`,
 give the user the link it prints to approve, ask them for the approval code

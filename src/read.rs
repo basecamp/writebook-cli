@@ -52,7 +52,7 @@ pub fn read(url: &str, json: bool) -> Result<()> {
         bail!("'{url}' is a site, not a book or page — run `writebook books {url}` to see its books");
     }
 
-    let web = connect(&target.host);
+    let web = connect(&target.host)?;
 
     let document = match from_api(&web, &target)? {
         Some(document) => document,
@@ -70,7 +70,7 @@ pub fn read(url: &str, json: bool) -> Result<()> {
 
 pub fn books(url: &str, json: bool) -> Result<()> {
     let target = web::parse_target(url)?;
-    let web = connect(&target.host);
+    let web = connect(&target.host)?;
     let books = list_books(&web)?;
 
     if json {
@@ -92,7 +92,7 @@ pub fn books(url: &str, json: bool) -> Result<()> {
 
 pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
     let target = web::parse_target(url)?;
-    let web = connect(&target.host);
+    let web = connect(&target.host)?;
 
     if query.trim().is_empty() {
         bail!("nothing to search for");
@@ -125,8 +125,8 @@ pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn connect(host: &str) -> Web {
-    Web::new(host, creds::existing_access_token(host))
+fn connect(host: &str) -> Result<Web> {
+    Ok(Web::new(host, creds::existing_access_token(host)?))
 }
 
 /// Read through the CLI API. None when there's no token or the site doesn't
@@ -196,7 +196,8 @@ fn leaf_markdown(web: &Web, book_id: u64, kind: &str, leaf_id: u64) -> Result<St
     })
 }
 
-/// GET a JSON document. None when the site doesn't have that endpoint.
+/// GET a JSON document. None when the site doesn't have that endpoint (404,
+/// or an answer that isn't JSON); any other failure is an error.
 fn get_json(web: &Web, path: &str) -> Result<Option<Value>> {
     let page = web.get(path, "application/json")?;
 
@@ -204,11 +205,35 @@ fn get_json(web: &Web, path: &str) -> Result<Option<Value>> {
         bail!("{} did not accept the token — sign in again, or check --token / WRITEBOOK_TOKEN", web.host);
     }
 
-    if !page.ok() {
+    if matches!(page.status, 404 | 406) {
         return Ok(None);
     }
 
+    if !page.ok() {
+        bail!("{}", unexpected(web, &page, path));
+    }
+
     Ok(serde_json::from_str(&page.body).ok())
+}
+
+fn unexpected(web: &Web, page: &web::Page, path: &str) -> String {
+    match &page.location {
+        Some(location) if (300..400).contains(&page.status) => {
+            format!("{} answered {} for {path}, sending it to {location} — try that address", web.host, page.status)
+        }
+        _ => format!("{} answered {} for {path}", web.host, page.status),
+    }
+}
+
+/// With a token, make sure the site accepts it before reading pages that
+/// also open to anonymous readers, which would otherwise quietly show less.
+/// Sites without the CLI API don't take tokens at all; that's not an error.
+fn check_token(web: &Web, book_id: u64) -> Result<()> {
+    if web.signed_in() {
+        get_json(web, &format!("/books/{book_id}/manifest.json"))?;
+    }
+
+    Ok(())
 }
 
 fn from_export(web: &Web, target: &Target) -> Result<Document> {
@@ -220,7 +245,7 @@ fn from_export(web: &Web, target: &Target) -> Result<Document> {
     }
 
     if !page.ok() {
-        bail!("{} answered {} for {}.md", web.host, page.status, web.url(&target.path));
+        bail!("{}", unexpected(web, &page, &format!("{}.md", target.path)));
     }
 
     let (fields, markdown) = web::split_front_matter(&page.body);
@@ -262,7 +287,12 @@ fn list_books(web: &Web) -> Result<Vec<Book>> {
     }
 
     if !page.ok() {
-        bail!("{} answered {} for its book list", web.host, page.status);
+        bail!("{}", unexpected(web, &page, "/"));
+    }
+
+    // The library shows a sign-in button to anonymous readers only.
+    if web.signed_in() && page.body.contains("href=\"/session/new\"") {
+        eprintln!("note: {} did not accept the token (it may not take tokens yet), so this lists published books only", web.host);
     }
 
     Ok(web::parse_library(&page.body)
@@ -281,6 +311,8 @@ fn list_books(web: &Web) -> Result<Vec<Book>> {
 /// forgery check on Writebooks with the CLI API; otherwise this does what a
 /// browser does: open the book for a session cookie and form token, then post.
 fn search_book(web: &Web, book_id: u64, query: &str) -> Result<Vec<web::SearchHit>> {
+    check_token(web, book_id)?;
+
     let book_path = format!("/{book_id}/book");
     let book = web.get(&book_path, "text/html")?;
 
@@ -289,7 +321,7 @@ fn search_book(web: &Web, book_id: u64, query: &str) -> Result<Vec<web::SearchHi
     }
 
     if !book.ok() {
-        bail!("{} answered {} for {}", web.host, book.status, web.url(&book_path));
+        bail!("{}", unexpected(web, &book, &book_path));
     }
 
     let cookie = book.cookies.join("; ");
@@ -303,7 +335,7 @@ fn search_book(web: &Web, book_id: u64, query: &str) -> Result<Vec<web::SearchHi
     let results = web.post_form(&format!("/books/{book_id}/search"), &form, Some(&cookie))?;
 
     if !results.ok() {
-        bail!("{} answered {} to a search in book {book_id}", web.host, results.status);
+        bail!("{}", unexpected(web, &results, &format!("/books/{book_id}/search")));
     }
 
     Ok(web::parse_search_results(&results.body))

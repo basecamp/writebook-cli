@@ -13,6 +13,8 @@ const DOWNLOAD_LIMIT: u64 = 512 * 1024 * 1024;
 pub fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
         .user_agent(USER_AGENT)
         .build()
         .new_agent()

@@ -125,11 +125,17 @@ basecamp/writebook#516; older ones still sign in by waiting at a terminal.
 
 ### Tokens, for agents and scripts
 
-`--token <token>` or `WRITEBOOK_TOKEN` replaces the stored sign-in for any
-command: the token is sent as is, never refreshed and never stored. When
+`WRITEBOOK_TOKEN` (or `--token`) replaces the stored sign-in for any command:
+the token is sent as is, never refreshed and never stored. Name the site it
+belongs to with `WRITEBOOK_TOKEN_HOST` (or `--token-host`), like
+`https://books.example.com`: the token is only ever sent there, so following a
+link to another site can't leak it, and never over plain http except to this
+machine. Prefer the environment variable to the flag, which other users on the
+machine can see in the process list. When
 there's no token and no stored sign-in, the browser sign-in only starts if
-someone is at a terminal to approve it. Run unattended (no terminal, or `CI`
-set), the CLI exits with an error right away instead of waiting.
+someone is at a terminal to approve it. Run unattended (no terminal, or `CI`,
+`CLAUDECODE` or `WRITEBOOK_NO_SIGN_IN` set), the CLI exits with an error right
+away instead of waiting.
 
 ## Reading without a checkout
 

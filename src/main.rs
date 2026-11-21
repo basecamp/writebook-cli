@@ -29,6 +29,9 @@ struct Cli {
     /// Token to use instead of signing in (for agents and scripts)
     #[usage(long, global, env = "WRITEBOOK_TOKEN")]
     token: Option<String>,
+    /// The site the token is for, like https://books.example.com; it is never sent elsewhere
+    #[usage(long, global, env = "WRITEBOOK_TOKEN_HOST")]
+    token_host: Option<String>,
     #[usage(subcommand)]
     command: Command,
 }
@@ -163,7 +166,7 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     if let Some(token) = &cli.token {
-        creds::use_token(token);
+        creds::use_token(token, cli.token_host.as_deref());
     }
 
     match cli.command {

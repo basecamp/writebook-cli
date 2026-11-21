@@ -15,6 +15,9 @@ fn live_url() -> Option<String> {
     let url = std::env::var("WRITEBOOK_LIVE_URL").ok().filter(|it| !it.is_empty());
 
     if url.is_none() {
+        // In CI a missing URL means the job is misconfigured, not that the
+        // tests should quietly pass.
+        assert!(std::env::var_os("CI").is_none(), "WRITEBOOK_LIVE_URL is not set in CI");
         eprintln!("skipped: set WRITEBOOK_LIVE_URL to run against a real Writebook");
     }
 
