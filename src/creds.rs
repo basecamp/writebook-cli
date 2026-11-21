@@ -1,12 +1,19 @@
 //! Per-host OAuth credentials, obtained through the RFC 8628 device flow and
 //! refreshed transparently. Stored in ~/.config/writebook/credentials.json so
 //! several checkouts share one login and no token ever lives inside a checkout.
+//!
+//! A token given with --token or WRITEBOOK_TOKEN wins over all of that: it's
+//! used as-is, never refreshed, and nothing is stored. And the browser sign-in
+//! only starts when someone is at a terminal to approve it; unattended runs
+//! get an error instead of a wait.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::api;
@@ -15,6 +22,8 @@ use crate::fsutil;
 const CLIENT_ID: &str = "writebook-cli";
 const DEVICE_CODE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const EXPIRY_SLACK: u64 = 30;
+
+static GIVEN_TOKEN: OnceLock<String> = OnceLock::new();
 
 #[derive(Serialize, Deserialize, Default)]
 struct CredentialsFile {
@@ -29,9 +38,27 @@ pub struct Credentials {
     pub expires_at: u64,
 }
 
-/// A valid access token for the host, whatever it takes: cached when fresh,
-/// refreshed when expired, and a fresh device-flow sign-in when all else fails.
+/// Use this token for every request instead of the stored sign-in.
+pub fn use_token(token: &str) {
+    let token = token.trim();
+
+    if !token.is_empty() {
+        let _ = GIVEN_TOKEN.set(token.to_string());
+    }
+}
+
+fn given_token() -> Option<String> {
+    GIVEN_TOKEN.get().cloned()
+}
+
+/// A valid access token for the host, whatever it takes: the given token,
+/// cached when fresh, refreshed when expired, and a fresh device-flow sign-in
+/// when all else fails.
 pub fn access_token(host: &str) -> Result<String> {
+    if let Some(token) = given_token() {
+        return Ok(token);
+    }
+
     let file = load()?;
 
     match file.hosts.get(host) {
@@ -47,6 +74,10 @@ pub fn access_token(host: &str) -> Result<String> {
 /// Force-refresh after a 401: the cached token was rejected even though it
 /// looked fresh, so rotate the refresh token or fall back to signing in again.
 pub fn renewed_access_token(host: &str) -> Result<String> {
+    if given_token().is_some() {
+        bail!("{host} did not accept the token from --token or WRITEBOOK_TOKEN");
+    }
+
     let file = load()?;
 
     match file.hosts.get(host) {
@@ -58,7 +89,31 @@ pub fn renewed_access_token(host: &str) -> Result<String> {
     }
 }
 
+/// A token for read-only requests, if there is one without asking anybody:
+/// the given token, or the stored sign-in (refreshed if need be). None means
+/// read anonymously.
+pub fn existing_access_token(host: &str) -> Option<String> {
+    if let Some(token) = given_token() {
+        return Some(token);
+    }
+
+    let credentials = load().ok()?.hosts.get(host).cloned()?;
+
+    if expired(&credentials) {
+        refresh(host, &credentials.refresh_token).ok().map(|it| it.access_token)
+    } else {
+        Some(credentials.access_token)
+    }
+}
+
 fn login(host: &str) -> Result<Credentials> {
+    if !someone_can_approve() {
+        bail!(
+            "not signed in to {host}, and nobody is at a terminal to approve a browser sign-in. \
+             Pass --token or set WRITEBOOK_TOKEN, or run this once in a terminal to sign in"
+        );
+    }
+
     let authorization = request_device_authorization(host)?;
 
     let user_code = string_field(&authorization, "user_code")?;
@@ -192,6 +247,12 @@ fn config_dir() -> PathBuf {
     } else {
         dirs::home_dir().expect("could not determine the home directory").join(".config/writebook")
     }
+}
+
+/// The device flow needs a person to read the code and approve it. Without a
+/// terminal on both ends (agents, cron, CI) it would only wait and time out.
+fn someone_can_approve() -> bool {
+    std::env::var_os("CI").is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 fn open_in_browser(url: &str) {
