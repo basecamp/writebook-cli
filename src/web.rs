@@ -56,13 +56,7 @@ impl Web {
     }
 
     pub fn get(&self, path: &str, accept: &str) -> Result<Page> {
-        let mut request = self.agent.get(&self.url(path)).header("Accept", accept);
-
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", &format!("Bearer {token}"));
-        }
-
-        read(request.call(), &self.host)
+        self.get_query(path, accept, &[])
     }
 
     /// GET with query parameters, encoded for the URL.

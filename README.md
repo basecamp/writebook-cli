@@ -133,10 +133,10 @@ or either with `.md`, `?search=` or `#anchor` on the end.
 
 `books` and `search` use Writebook's JSON book list and search
 (`/books.json`, `/search.json` and `/books/:id/search.json`), which a
-read-only token may call. Searching a whole site is one request. On a
-Writebook without them, they read the library page and send the search form
-instead, and a read-only token cannot send that form. Without a token they see published
-books only.
+read-only token may call. Searching a whole site is one request and returns
+the best 50 matches across its books. On a Writebook without them, they read
+the library page and send each book's search form instead, and a read-only
+token cannot send that form. Without a token they see published books only.
 
 ## Server requirements
 

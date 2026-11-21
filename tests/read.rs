@@ -315,7 +315,7 @@ fn lists_books_from_json_with_a_token() {
 }
 
 #[test]
-fn says_a_token_lists_private_books_when_none_are_published() {
+fn explains_a_site_with_no_published_books_from_json() {
     let server = Server::start(|request| match request.path.as_str() {
         "/books.json" => reply(200, "[]"),
         _ => reply(404, ""),
@@ -323,8 +323,22 @@ fn says_a_token_lists_private_books_when_none_are_published() {
 
     let output = writebook(&["books", &server.url], &[]);
 
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("has no published books"), "{}", stderr(&output));
+}
+
+#[test]
+fn says_private_books_need_a_token_when_an_anonymous_search_finds_nothing() {
+    let server = Server::start(|request| match request.path.split('?').next().unwrap() {
+        "/search.json" => reply(200, r#"{"query":"failover","results":[]}"#),
+        _ => reply(404, ""),
+    });
+
+    let output = writebook(&["search", &server.url, "failover"], &[]);
+
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).contains("Listing private ones needs a token"), "{}", stdout(&output));
+    assert_eq!(stdout(&output), "No matches.\n");
+    assert!(stderr(&output).contains("Private ones need a token"), "{}", stderr(&output));
 }
 
 #[test]

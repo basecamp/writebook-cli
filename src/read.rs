@@ -104,8 +104,6 @@ pub fn books(url: &str, json: bool) -> Result<()> {
 
     if json {
         println!("{}", serde_json::to_string_pretty(&books)?);
-    } else if books.is_empty() && !web.signed_in() {
-        println!("No published books. Listing private ones needs a token (--token or WRITEBOOK_TOKEN).");
     } else if books.is_empty() {
         println!("No books.");
     } else {
@@ -138,6 +136,10 @@ pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&hits)?);
     } else if hits.is_empty() {
         println!("No matches.");
+
+        if !web.signed_in() {
+            eprintln!("note: this searched published books only. Private ones need a token (--token or WRITEBOOK_TOKEN)");
+        }
     } else {
         for hit in &hits {
             let book = if hit.book.is_empty() { String::new() } else { format!(" ({})", hit.book) };
@@ -160,7 +162,7 @@ fn search_api(web: &Web, book_id: Option<u64>, query: &str) -> Result<Option<Vec
         return Ok(None);
     };
     let Ok(search) = serde_json::from_value::<ApiSearch>(value) else {
-        return Ok(None);
+        bail!("{} answered {path} with JSON this version of the CLI doesn't understand", web.host);
     };
 
     Ok(Some(
@@ -374,12 +376,19 @@ fn not_readable(web: &Web, what: &str, url: &str) -> String {
 
 fn list_books(web: &Web) -> Result<Vec<Book>> {
     if let Some(value) = api_json(web, "/books.json", &[])? {
-        if let Ok(books) = serde_json::from_value::<Vec<ApiBook>>(value) {
-            return Ok(books
-                .into_iter()
-                .map(|book| Book { id: book.id, title: book.title, author: book.author.unwrap_or_default(), url: book.url })
-                .collect());
+        let Ok(books) = serde_json::from_value::<Vec<ApiBook>>(value) else {
+            bail!("{} answered /books.json with JSON this version of the CLI doesn't understand", web.host);
+        };
+
+        // As the library page does, which sends anonymous readers to sign in
+        if books.is_empty() && !web.signed_in() {
+            bail!("{} has no published books. Listing private ones needs a token (--token or WRITEBOOK_TOKEN)", web.host);
         }
+
+        return Ok(books
+            .into_iter()
+            .map(|book| Book { id: book.id, title: book.title, author: book.author.unwrap_or_default(), url: book.url })
+            .collect());
     }
 
     list_books_from_library(web)
