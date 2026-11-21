@@ -1,10 +1,10 @@
 ---
 name: writebook
 description: |
-  Edit Writebook books as local Markdown files with the writebook CLI. Clone a
-  book, edit pages as plain files, reorder by moving lines in index.md, and
-  sync with git-style pull/push. Use for ANY task that reads or changes a
-  Writebook book.
+  Read and edit Writebook books with the writebook CLI. Read a book or page
+  as Markdown, list books and search without cloning; or clone a book, edit
+  pages as plain files, reorder by moving lines in index.md, and sync with
+  git-style pull/push. Use for ANY task that reads or changes a Writebook book.
 triggers:
   - writebook
   - /writebook
@@ -13,6 +13,10 @@ triggers:
   - writebook push
   - writebook status
   - writebook diff
+  - writebook read
+  - writebook search
+  - read a handbook page
+  - runbook in writebook
   - edit a writebook book
   - add a page to a book
   - reorder book pages
@@ -36,7 +40,29 @@ writebook remote add|list|remove   # manage remotes
 
 `clone` signs in through a browser device flow: it prints a code and a URL,
 the user approves in a signed-in browser, and the CLI proceeds on its own.
-Tokens are stored per host and refresh themselves.
+Tokens are stored per host and refresh themselves. A token from `--token` or
+`WRITEBOOK_TOKEN` replaces the browser sign-in.
+
+## Just reading
+
+To look something up, don't clone. These print to stdout:
+
+```sh
+writebook read <book-or-page-url>        # Markdown with title/url front matter
+writebook read <url> --json              # {title, url, markdown, source}
+writebook books <site-url> [--json]      # the site's books
+writebook search <book-or-site-url> "query" [--json]   # matching pages, with links
+```
+
+`read` accepts reading links, editing links and `.md` links. Published books
+need no sign-in. For private books, pass a token: `--token <token>` or
+`WRITEBOOK_TOKEN`.
+
+## Running unattended
+
+Set `WRITEBOOK_TOKEN` (or pass `--token`). Without a token or a stored
+sign-in, commands that need one fail right away when nobody is at a terminal;
+they never wait for a browser approval.
 
 ## A checkout
 

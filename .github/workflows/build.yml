@@ -1,0 +1,42 @@
+name: Build
+
+# Release binaries for each platform, uploaded as workflow artifacts.
+# CI runs this on every change; the release workflow attaches them to a release.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf "dist/writebook-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" writebook
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: writebook-${{ matrix.target }}
+          path: dist/writebook-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
