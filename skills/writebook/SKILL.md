@@ -38,8 +38,9 @@ writebook push                     # upload local changes (refuses when behind)
 writebook remote add|list|remove   # manage remotes
 ```
 
-`clone` signs in through a browser device flow: it prints a code and a URL,
-the user approves in a signed-in browser, and the CLI proceeds on its own.
+`clone` signs in through a browser device flow: it prints a link, the user
+approves it in a signed-in browser on any device, and either types the
+approval code Writebook then shows, or waits for the CLI to notice.
 Tokens are stored per host and refresh themselves. A token from `--token` or
 `WRITEBOOK_TOKEN` replaces the browser sign-in.
 
@@ -63,6 +64,10 @@ need no sign-in. For private books, pass a token: `--token <token>` or
 Set `WRITEBOOK_TOKEN` (or pass `--token`). Without a token or a stored
 sign-in, commands that need one fail right away when nobody is at a terminal;
 they never wait for a browser approval.
+
+To sign in with no terminal, use two steps: run `writebook login <site-url>`,
+give the user the link it prints to approve, ask them for the approval code
+Writebook shows them, then run `writebook login <site-url> --code <code>`.
 
 ## A checkout
 

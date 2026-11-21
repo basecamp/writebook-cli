@@ -14,10 +14,13 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api;
 use crate::fsutil;
+
+mod sign_in;
+pub use sign_in::login_command;
 
 const CLIENT_ID: &str = "writebook-cli";
 const DEVICE_CODE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -110,59 +113,12 @@ fn login(host: &str) -> Result<Credentials> {
     if !someone_can_approve() {
         bail!(
             "not signed in to {host}, and nobody is at a terminal to approve a browser sign-in. \
-             Pass --token or set WRITEBOOK_TOKEN, or run this once in a terminal to sign in"
+             Pass --token or set WRITEBOOK_TOKEN, run this once in a terminal to sign in, \
+             or sign in in two steps with `writebook login {host}`"
         );
     }
 
-    let authorization = request_device_authorization(host)?;
-
-    let user_code = string_field(&authorization, "user_code")?;
-    let verification_uri_complete = string_field(&authorization, "verification_uri_complete")?;
-    let device_code = string_field(&authorization, "device_code")?;
-    let expires_in = authorization["expires_in"].as_u64().unwrap_or(600);
-    let mut interval = authorization["interval"].as_u64().unwrap_or(5);
-
-    println!("Sign in to {host} to connect this device.");
-    println!();
-    println!("  Your code: {user_code}");
-    println!("  Approve it at: {verification_uri_complete}");
-    println!();
-    println!("Waiting for approval...");
-    open_in_browser(&verification_uri_complete);
-
-    let deadline = SystemTime::now() + Duration::from_secs(expires_in);
-
-    loop {
-        std::thread::sleep(Duration::from_secs(interval));
-
-        if SystemTime::now() > deadline {
-            bail!("the sign-in code expired before it was approved — try again");
-        }
-
-        let (status, body) = post_token_request(
-            host,
-            &[
-                ("client_id", CLIENT_ID),
-                ("grant_type", DEVICE_CODE_GRANT_TYPE),
-                ("device_code", &device_code),
-            ],
-        )?;
-
-        if status == 200 {
-            let credentials = credentials_from(&body)?;
-            store(host, &credentials)?;
-            println!("Signed in.");
-            return Ok(credentials);
-        }
-
-        match body["error"].as_str() {
-            Some("authorization_pending") => {}
-            Some("slow_down") => interval += 5,
-            Some("expired_token") => bail!("the sign-in code expired before it was approved — try again"),
-            Some("access_denied") => bail!("the sign-in was denied"),
-            _ => bail!("sign-in failed: {}", error_description(&body)),
-        }
-    }
+    sign_in::at_terminal(host)
 }
 
 fn refresh(host: &str, refresh_token: &str) -> Result<Credentials> {
@@ -253,14 +209,6 @@ fn config_dir() -> PathBuf {
 /// terminal on both ends (agents, cron, CI) it would only wait and time out.
 fn someone_can_approve() -> bool {
     std::env::var_os("CI").is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
-}
-
-fn open_in_browser(url: &str) {
-    let _ = std::process::Command::new("xdg-open")
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
 }
 
 fn string_field(body: &Value, field: &str) -> Result<String> {

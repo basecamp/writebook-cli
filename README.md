@@ -50,6 +50,7 @@ completions, and prints the basics.
 | `books <site-url>` | List the books on a site |
 | `read <url>` | Print a book or one page as Markdown |
 | `search <url> <query>` | Search a book, or every book on a site |
+| `login <site-url> [--code <code>]` | Sign in; without a terminal, in two steps (link, then code) |
 | `setup` | Install the agent skill + shell completions, print a quick tour |
 | `skill print/install` | Print the embedded SKILL.md, or install it for coding agents |
 | `clone <book-url> [dir]` | Sign in (browser device flow) and download the book |
@@ -102,10 +103,25 @@ markers to resolve before the next sync. `push` sends each update with the
 fingerprint it was based on, and the server answers 409 rather than clobber an
 edit you haven't seen — pull, merge, push again.
 
-Authentication is an OAuth device flow: the CLI prints a short code, you
-approve it in a signed-in browser, tokens land in
-`~/.config/writebook/credentials.json` and refresh themselves. No token ever
+Authentication is an OAuth device flow. The CLI prints a link, and you
+approve it in a signed-in browser on any device: nothing has to open on the
+machine the CLI runs on. Writebook then shows an approval code; type it into
+the CLI to finish, or just wait for the CLI to notice the approval. Tokens land
+in `~/.config/writebook/credentials.json` and refresh themselves. No token ever
 lives inside a checkout.
+
+### Signing in without a terminal
+
+Where nothing can type into the CLI (an agent, a script), sign in in two
+steps:
+
+```sh
+writebook login https://books.example.com                  # prints the link to approve
+writebook login https://books.example.com --code WXYZ-2345 # the code Writebook showed
+```
+
+The link works for 10 minutes. Approval codes need a Writebook with
+basecamp/writebook#516; older ones still sign in by waiting at a terminal.
 
 ### Tokens, for agents and scripts
 
