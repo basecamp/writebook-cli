@@ -289,3 +289,98 @@ fn explains_a_site_with_no_published_books() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("has no published books"), "{}", stderr(&output));
 }
+
+#[test]
+fn lists_books_from_json_with_a_token() {
+    let server = Server::start(|request| {
+        if request.header("Authorization") != Some("Bearer secret") {
+            return reply(401, "");
+        }
+
+        match request.path.as_str() {
+            "/books.json" => reply(
+                200,
+                r#"[{"id":4,"title":"Ops Handbook","subtitle":null,"author":null,"slug":"ops-handbook","published":false,
+                     "url":"http://books.test/4/ops-handbook"}]"#,
+            ),
+            _ => reply(404, ""),
+        }
+    });
+
+    let output = writebook(&["books", &server.url], &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "- [Ops Handbook](http://books.test/4/ops-handbook)\n");
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn says_a_token_lists_private_books_when_none_are_published() {
+    let server = Server::start(|request| match request.path.as_str() {
+        "/books.json" => reply(200, "[]"),
+        _ => reply(404, ""),
+    });
+
+    let output = writebook(&["books", &server.url], &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Listing private ones needs a token"), "{}", stdout(&output));
+}
+
+#[test]
+fn searches_every_book_in_one_json_request() {
+    let server = Server::start(|request| match (request.method.as_str(), request.path.split('?').next().unwrap()) {
+        ("GET", "/search.json") => {
+            let query = request.path.split_once('?').map(|(_, it)| it).unwrap_or_default();
+            if query != "q=roll+back" && query != "q=roll%20back" {
+                return reply(400, "");
+            }
+
+            reply(
+                200,
+                r#"{"query":"roll back","results":[{"id":12,"title":"Deploys","type":"Page","book":{"id":4,"title":"Handbook"},
+                     "snippet":"how to roll\n back","url":"http://books.test/4/handbook/12/deploys"}]}"#,
+            )
+        }
+        _ => reply(404, ""),
+    });
+
+    let output = writebook(&["search", &server.url, "roll back"], &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "- [Deploys](http://books.test/4/handbook/12/deploys) (Handbook): how to roll back\n");
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn searches_a_book_through_json_with_a_read_only_token() {
+    let server = Server::start(|request| {
+        if request.header("Authorization") != Some("Bearer secret") {
+            return reply(401, "");
+        }
+
+        match (request.method.as_str(), request.path.split('?').next().unwrap()) {
+            // A read-only token is refused on every POST, the search form's included
+            ("POST", _) => reply(403, ""),
+            ("GET", "/books/4/search.json") => reply(
+                200,
+                r#"{"query":"roll","results":[{"id":12,"title":"Deploys","type":"Page","book":{"id":4,"title":"Handbook"},
+                     "snippet":"how to roll back","url":"http://books.test/4/handbook/12/deploys"}]}"#,
+            ),
+            _ => reply(404, ""),
+        }
+    });
+
+    let output = writebook(
+        &["search", "--json", &format!("{}/4/handbook", server.url), "roll"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(json[0]["title"], "Deploys");
+    assert_eq!(json[0]["book"], "");
+    assert_eq!(json[0]["url"], "http://books.test/4/handbook/12/deploys");
+    assert_eq!(json[0]["snippet"], "how to roll back");
+    assert!(server.requests().iter().all(|request| request.method == "GET"));
+}
