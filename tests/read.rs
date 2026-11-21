@@ -61,8 +61,10 @@ fn reads_through_the_api_with_a_token() {
         }
     });
 
-    let output =
-        writebook(&["read", "--json", &format!("{}/4/handbook/12/on-call", server.url)], &[("WRITEBOOK_TOKEN", "secret")]);
+    let output = writebook(
+        &["read", "--json", &format!("{}/4/handbook/12/on-call", server.url)],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
     assert!(output.status.success(), "{}", stderr(&output));
 
     let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
@@ -78,8 +80,10 @@ fn the_token_flag_wins_over_the_environment() {
         _ => reply(401, ""),
     });
 
-    let output =
-        writebook(&["--token", "from-flag", "read", &format!("{}/4/handbook", server.url)], &[("WRITEBOOK_TOKEN", "from-env")]);
+    let output = writebook(
+        &["--token", "from-flag", "read", &format!("{}/4/handbook", server.url)],
+        &[("WRITEBOOK_TOKEN", "from-env"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
 
     // 404 from the API means "no API here", so it falls back to the export,
     // which 404s too: an error, but one about the page, not the token.
@@ -95,7 +99,10 @@ fn falls_back_to_the_export_when_the_site_has_no_api() {
         _ => reply(404, "<html>not found</html>"),
     });
 
-    let output = writebook(&["read", &format!("{}/4/handbook/12/on-call", server.url)], &[("WRITEBOOK_TOKEN", "secret")]);
+    let output = writebook(
+        &["read", &format!("{}/4/handbook/12/on-call", server.url)],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stdout(&output).contains("Page the person on call."));
@@ -105,7 +112,10 @@ fn falls_back_to_the_export_when_the_site_has_no_api() {
 fn a_rejected_token_is_an_error() {
     let server = Server::start(|_| reply(401, r#"{"error":"invalid_token"}"#));
 
-    let output = writebook(&["read", &format!("{}/4/handbook/12/on-call", server.url)], &[("WRITEBOOK_TOKEN", "nope")]);
+    let output = writebook(
+        &["read", &format!("{}/4/handbook/12/on-call", server.url)],
+        &[("WRITEBOOK_TOKEN", "nope"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("did not accept the token"), "{}", stderr(&output));
@@ -113,12 +123,62 @@ fn a_rejected_token_is_an_error() {
 
 #[test]
 fn explains_private_pages() {
-    let server = Server::start(|_| redirect("/session/new"));
+    // Writebook answers 404 for a page in a book you may not see.
+    let server = Server::start(|_| reply(404, ""));
 
     let output = writebook(&["read", &format!("{}/4/handbook/12/on-call", server.url)], &[]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("WRITEBOOK_TOKEN"), "{}", stderr(&output));
+}
+
+#[test]
+fn never_sends_the_token_to_another_site() {
+    let server = Server::start(|_| reply(200, PAGE_MD));
+
+    let output = writebook(
+        &["read", &format!("{}/4/handbook/12/on-call", server.url)],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", "https://books.example.com")],
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("the token is for https://books.example.com"), "{}", stderr(&output));
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_token_needs_to_say_which_site_it_is_for() {
+    let server = Server::start(|_| reply(200, PAGE_MD));
+
+    let output = writebook(&["read", &format!("{}/4/handbook/12/on-call", server.url)], &[("WRITEBOOK_TOKEN", "secret")]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("WRITEBOOK_TOKEN_HOST"), "{}", stderr(&output));
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn never_sends_the_token_over_plain_http_to_another_machine() {
+    let output = writebook(
+        &["read", "http://books.example.com/4/handbook/12/on-call"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", "http://books.example.com")],
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("only sent over https"), "{}", stderr(&output));
+}
+
+#[test]
+fn agents_never_get_a_browser_sign_in_even_with_a_terminal() {
+    // CLAUDECODE marks a run under an agent; the check happens before any
+    // terminal test, so it fails fast here too.
+    let server = Server::start(|_| reply(500, ""));
+    let target = support::tempdir().join("checkout");
+
+    let output = writebook(&["clone", &format!("{}/4/handbook", server.url), target.to_str().unwrap()], &[("CLAUDECODE", "1")]);
+
+    assert!(!output.status.success());
+    assert!(server.requests().is_empty());
 }
 
 #[test]
@@ -189,7 +249,7 @@ fn unattended_sign_in_fails_fast_instead_of_waiting_for_a_browser() {
 
     assert!(!output.status.success());
     assert!(started.elapsed() < Duration::from_secs(5));
-    assert!(stderr(&output).contains("--token"), "{}", stderr(&output));
+    assert!(stderr(&output).contains("WRITEBOOK_TOKEN"), "{}", stderr(&output));
     assert!(server.requests().is_empty(), "it must not even start a sign-in");
 }
 
@@ -210,9 +270,22 @@ fn clone_uses_the_given_token() {
     });
     let target = support::tempdir().join("checkout");
 
-    let output =
-        writebook(&["clone", &format!("{}/4/handbook", server.url), target.to_str().unwrap()], &[("WRITEBOOK_TOKEN", "secret")]);
+    let output = writebook(
+        &["clone", &format!("{}/4/handbook", server.url), target.to_str().unwrap()],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(target.join("index.md").exists());
+}
+
+#[test]
+fn explains_a_site_with_no_published_books() {
+    // Writebook sends anonymous readers to sign in when nothing is published.
+    let server = Server::start(|_| redirect("/session/new"));
+
+    let output = writebook(&["books", &server.url], &[]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("has no published books"), "{}", stderr(&output));
 }

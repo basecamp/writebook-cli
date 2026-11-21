@@ -39,8 +39,14 @@ impl Page {
 
 impl Web {
     pub fn new(host: &str, token: Option<String>) -> Web {
-        let agent =
-            ureq::Agent::config_builder().http_status_as_error(false).max_redirects(0).user_agent(USER_AGENT).build().new_agent();
+        let agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .timeout_connect(Some(std::time::Duration::from_secs(10)))
+            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .user_agent(USER_AGENT)
+            .build()
+            .new_agent();
 
         Web { host: host.to_string(), token, agent }
     }
@@ -128,8 +134,14 @@ pub fn parse_target(url: &str) -> Result<Target> {
         bail!("'{url}' is not an http(s) URL");
     };
 
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let host = format!("{scheme}://{host}");
+    let split = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(split);
+
+    if authority.contains('@') {
+        bail!("'{url}' has a user name or password in it; give the site's plain address");
+    }
+
+    let host = format!("{scheme}://{}", authority.to_lowercase());
 
     let path = path.split(['#', '?']).next().unwrap_or_default();
     let path = path.trim_end_matches('/');
@@ -396,7 +408,20 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_site_apart_from_query_and_anchor() {
+        assert_eq!(
+            parse_target("https://Books.Example.com?x=1").unwrap(),
+            target("https://books.example.com", None, None, None, "")
+        );
+        assert_eq!(
+            parse_target("https://books.example.com#a").unwrap(),
+            target("https://books.example.com", None, None, None, "")
+        );
+    }
+
+    #[test]
     fn rejects_bad_links() {
+        assert!(parse_target("https://books.example.com@evil.example/4/x").is_err());
         assert!(parse_target("books.example.com/4/x").is_err());
         assert!(parse_target("https://books.example.com/users/4").is_err());
         assert!(parse_target("https://books.example.com/4/x/nope").is_err());

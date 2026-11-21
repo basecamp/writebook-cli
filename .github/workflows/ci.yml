@@ -27,7 +27,8 @@ jobs:
             target
           key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --locked
+      # Everything but tests/live.rs, which the live job runs against a real Writebook.
+      - run: cargo test --locked --bins --test read
 
   # The read-only commands against a real Writebook: the latest image of
   # basecamp/writebook main, seeded with tests/support/seed.rb.
