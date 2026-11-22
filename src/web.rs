@@ -1,7 +1,7 @@
 //! Plain web requests for the read-only commands: no sign-in flow, no
 //! redirects followed (a redirect to the sign-in page means "private"), and
-//! the small bits of HTML scraping that stand in for API endpoints Writebook
-//! doesn't have yet (the book list and search).
+//! the small bits of HTML scraping that stand in for the book list and search
+//! on Writebooks without their JSON endpoints.
 
 use anyhow::{Context, Result, bail};
 
@@ -56,7 +56,12 @@ impl Web {
     }
 
     pub fn get(&self, path: &str, accept: &str) -> Result<Page> {
-        let mut request = self.agent.get(&self.url(path)).header("Accept", accept);
+        self.get_query(path, accept, &[])
+    }
+
+    /// GET with query parameters, encoded for the URL.
+    pub fn get_query(&self, path: &str, accept: &str, query: &[(&str, &str)]) -> Result<Page> {
+        let mut request = self.agent.get(&self.url(path)).header("Accept", accept).query_pairs(query.iter().copied());
 
         if let Some(token) = &self.token {
             request = request.header("Authorization", &format!("Bearer {token}"));

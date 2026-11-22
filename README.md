@@ -147,9 +147,12 @@ or either with `.md`, `?search=` or `#anchor` on the end.
   export (a page's link plus `.md`), which serves published books without
   signing in.
 
-`books` and `search` read the site's library and search pages, since
-Writebook has no JSON for them yet. Without a token they see published books
-only.
+`books` and `search` use Writebook's JSON book list and search
+(`/books.json`, `/search.json` and `/books/:id/search.json`), which a
+read-only token may call. Searching a whole site is one request and returns
+the best 50 matches across its books. On a Writebook without them, they read
+the library page and send each book's search form instead, and a read-only
+token cannot send that form. Without a token they see published books only.
 
 ## Server requirements
 

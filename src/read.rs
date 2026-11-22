@@ -5,11 +5,12 @@
 //! Reading prefers the CLI API (the book manifest and leaf JSON) when a token
 //! is at hand, and falls back to Writebook's Markdown export (any reading link
 //! plus `.md`), which every recent Writebook serves for published books.
-//! Listing books and searching scrape the HTML pages until Writebook has JSON
-//! endpoints for them.
+//! Listing books and searching use Writebook's JSON endpoints (`/books.json`,
+//! `/search.json` and `/books/:id/search.json`), which read-only tokens may
+//! call, and scrape the HTML pages on Writebooks without them.
 
 use anyhow::{Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::checkout;
@@ -43,6 +44,34 @@ struct Hit {
     title: String,
     url: String,
     snippet: String,
+}
+
+/// A book in `/books.json`
+#[derive(Deserialize)]
+struct ApiBook {
+    id: u64,
+    title: String,
+    author: Option<String>,
+    url: String,
+}
+
+/// `/search.json` and `/books/:id/search.json`
+#[derive(Deserialize)]
+struct ApiSearch {
+    results: Vec<ApiHit>,
+}
+
+#[derive(Deserialize)]
+struct ApiHit {
+    title: String,
+    url: String,
+    snippet: Option<String>,
+    book: ApiHitBook,
+}
+
+#[derive(Deserialize)]
+struct ApiHitBook {
+    title: String,
 }
 
 pub fn read(url: &str, json: bool) -> Result<()> {
@@ -98,23 +127,19 @@ pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
         bail!("nothing to search for");
     }
 
-    let books = match target.book_id {
-        Some(id) => vec![(id, String::new())],
-        None => list_books(&web)?.into_iter().map(|book| (book.id, book.title)).collect(),
+    let hits = match search_api(&web, target.book_id, query)? {
+        Some(hits) => hits,
+        None => search_pages(&web, target.book_id, query)?,
     };
-
-    let mut hits = Vec::new();
-
-    for (book_id, book_title) in books {
-        for hit in search_book(&web, book_id, query)? {
-            hits.push(Hit { book: book_title.clone(), title: hit.title, url: web.url(&hit.path), snippet: hit.snippet });
-        }
-    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&hits)?);
     } else if hits.is_empty() {
         println!("No matches.");
+
+        if !web.signed_in() {
+            eprintln!("note: this searched published books only. Private ones need a token (--token or WRITEBOOK_TOKEN)");
+        }
     } else {
         for hit in &hits {
             let book = if hit.book.is_empty() { String::new() } else { format!(" ({})", hit.book) };
@@ -123,6 +148,58 @@ pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Search through the JSON endpoint: one book's, or every book's the reader
+/// can see in one request. None when the site doesn't have it.
+fn search_api(web: &Web, book_id: Option<u64>, query: &str) -> Result<Option<Vec<Hit>>> {
+    let path = match book_id {
+        Some(id) => format!("/books/{id}/search.json"),
+        None => "/search.json".to_string(),
+    };
+
+    let Some(value) = api_json(web, &path, &[("q", query)])? else {
+        return Ok(None);
+    };
+    let Ok(search) = serde_json::from_value::<ApiSearch>(value) else {
+        bail!("{} answered {path} with JSON this version of the CLI doesn't understand", web.host);
+    };
+
+    Ok(Some(
+        search
+            .results
+            .into_iter()
+            .map(|hit| Hit {
+                // One book's search names no book, as the search page doesn't
+                book: if book_id.is_some() { String::new() } else { hit.book.title },
+                title: hit.title,
+                url: hit.url,
+                snippet: one_line(&hit.snippet.unwrap_or_default()),
+            })
+            .collect(),
+    ))
+}
+
+/// Search the way a browser does, one book at a time.
+fn search_pages(web: &Web, book_id: Option<u64>, query: &str) -> Result<Vec<Hit>> {
+    let books = match book_id {
+        Some(id) => vec![(id, String::new())],
+        None => list_books(web)?.into_iter().map(|book| (book.id, book.title)).collect(),
+    };
+
+    let mut hits = Vec::new();
+
+    for (book_id, book_title) in books {
+        for hit in search_book(web, book_id, query)? {
+            hits.push(Hit { book: book_title.clone(), title: hit.title, url: web.url(&hit.path), snippet: hit.snippet });
+        }
+    }
+
+    Ok(hits)
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn connect(host: &str) -> Result<Web> {
@@ -216,6 +293,28 @@ fn get_json(web: &Web, path: &str) -> Result<Option<Value>> {
     Ok(serde_json::from_str(&page.body).ok())
 }
 
+/// GET one of the JSON endpoints that stand in for HTML pages. None when the
+/// site doesn't have it: not found, not acceptable (an older Writebook has
+/// only the HTML page), a redirect, or an answer that isn't JSON. The caller
+/// then reads the HTML page, which explains a private site or book.
+fn api_json(web: &Web, path: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
+    let page = web.get_query(path, "application/json", query)?;
+
+    if page.status == 401 {
+        bail!("{} did not accept the token — sign in again, or check --token / WRITEBOOK_TOKEN", web.host);
+    }
+
+    if matches!(page.status, 404 | 406) || (300..400).contains(&page.status) {
+        return Ok(None);
+    }
+
+    if !page.ok() {
+        bail!("{}", unexpected(web, &page, path));
+    }
+
+    Ok(serde_json::from_str(&page.body).ok())
+}
+
 fn unexpected(web: &Web, page: &web::Page, path: &str) -> String {
     match &page.location {
         Some(location) if (300..400).contains(&page.status) => {
@@ -276,6 +375,27 @@ fn not_readable(web: &Web, what: &str, url: &str) -> String {
 }
 
 fn list_books(web: &Web) -> Result<Vec<Book>> {
+    if let Some(value) = api_json(web, "/books.json", &[])? {
+        let Ok(books) = serde_json::from_value::<Vec<ApiBook>>(value) else {
+            bail!("{} answered /books.json with JSON this version of the CLI doesn't understand", web.host);
+        };
+
+        // As the library page does, which sends anonymous readers to sign in
+        if books.is_empty() && !web.signed_in() {
+            bail!("{} has no published books. Listing private ones needs a token (--token or WRITEBOOK_TOKEN)", web.host);
+        }
+
+        return Ok(books
+            .into_iter()
+            .map(|book| Book { id: book.id, title: book.title, author: book.author.unwrap_or_default(), url: book.url })
+            .collect());
+    }
+
+    list_books_from_library(web)
+}
+
+/// The books on the library page, for Writebooks without `/books.json`
+fn list_books_from_library(web: &Web) -> Result<Vec<Book>> {
     let page = web.get("/", "text/html")?;
 
     if page.wants_sign_in() {
