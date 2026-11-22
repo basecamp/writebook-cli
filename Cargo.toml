@@ -17,3 +17,10 @@ serde_json = "1"
 sha2 = "0.10"
 ureq = { version = "3", features = ["json"] }
 usage = { version = "6", package = "usage-rs", features = ["completions"] }
+
+# The code reads better with these, so CI's `cargo clippy -D warnings`
+# leaves them alone.
+[lints.clippy]
+collapsible_if = "allow"
+collapsible_match = "allow"
+too_many_arguments = "allow"

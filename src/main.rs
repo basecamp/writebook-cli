@@ -10,11 +10,13 @@ mod merge;
 mod plan;
 mod pull;
 mod push;
+mod read;
 mod remote;
 mod setup;
 mod skill;
 mod status;
 mod sync;
+mod web;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -24,6 +26,12 @@ use usage::{Cli, Subcommands};
 #[derive(Cli)]
 #[usage(bin = "writebook", version, unknown_flags = "error", completion)]
 struct Cli {
+    /// Token to use instead of signing in (for agents and scripts)
+    #[usage(long, global, env = "WRITEBOOK_TOKEN")]
+    token: Option<String>,
+    /// The site the token is for, like https://books.example.com; it is never sent elsewhere
+    #[usage(long, global, env = "WRITEBOOK_TOKEN_HOST")]
+    token_host: Option<String>,
     #[usage(subcommand)]
     command: Command,
 }
@@ -53,6 +61,32 @@ enum Command {
         /// Diff the remote's changes instead of yours
         #[usage(long)]
         remote: bool,
+    },
+    /// List the books on a Writebook site
+    Books {
+        /// Site URL, like https://books.example.com
+        url: String,
+        /// Print JSON instead of Markdown
+        #[usage(long)]
+        json: bool,
+    },
+    /// Print a book or one page as Markdown, without cloning
+    Read {
+        /// Book or page URL, like https://books.example.com/4/some-book/12/some-page
+        url: String,
+        /// Print JSON instead of Markdown
+        #[usage(long)]
+        json: bool,
+    },
+    /// Search a book, or every book on a site
+    Search {
+        /// Book URL, or a site URL to search all its books
+        url: String,
+        /// What to look for
+        query: String,
+        /// Print JSON instead of Markdown
+        #[usage(long)]
+        json: bool,
     },
     /// Set up writebook: agent skill, shell completions, and a quick tour
     Setup,
@@ -122,6 +156,10 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if let Some(token) = &cli.token {
+        creds::use_token(token, cli.token_host.as_deref());
+    }
+
     match cli.command {
         Command::Clone { url, directory } => clone::run(&url, directory.as_deref()),
         Command::Remote { command } => match command {
@@ -133,6 +171,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::Push => push::run(),
         Command::Status => status::run(),
         Command::Diff { remote } => diff_cmd::run(remote),
+        Command::Books { url, json } => read::books(&url, json),
+        Command::Read { url, json } => read::read(&url, json),
+        Command::Search { url, query, json } => read::search(&url, &query, json),
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),

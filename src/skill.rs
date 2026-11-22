@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const SKILL: &str = include_str!("../skills/writebook/SKILL.md");
 
@@ -38,7 +38,7 @@ pub fn install_files() -> Result<Vec<String>> {
     Ok(lines)
 }
 
-fn link_into_claude(home: &PathBuf) -> Result<String> {
+fn link_into_claude(home: &Path) -> Result<String> {
     let links_dir = home.join(".claude/skills");
     let link = links_dir.join("writebook");
     let target = PathBuf::from("../../.agents/skills/writebook");

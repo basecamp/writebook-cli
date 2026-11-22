@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      # Everything but tests/live.rs, which the live job runs against a real Writebook.
+      - run: cargo test --locked --bins --test read
+
+  # The read-only commands against a real Writebook: the latest image of
+  # basecamp/writebook main, seeded with tests/support/seed.rb.
+  live:
+    runs-on: ubuntu-latest
+    services:
+      writebook:
+        image: ghcr.io/basecamp/writebook:main
+        env:
+          SECRET_KEY_BASE: ci-only-not-a-secret-0123456789abcdef0123456789abcdef0123456789abcdef
+          DISABLE_SSL: "1"
+        ports:
+          - 3000:80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Wait for Writebook
+        run: |
+          for _ in $(seq 1 60); do
+            curl -fsS http://localhost:3000/up >/dev/null && exit 0
+            sleep 2
+          done
+          echo "Writebook did not come up" >&2
+          exit 1
+      - name: Seed books
+        run: docker exec -i "${{ job.services.writebook.id }}" bin/rails runner - < tests/support/seed.rb
+      - name: Live tests
+        run: cargo test --locked --test live
+        env:
+          WRITEBOOK_LIVE_URL: http://localhost:3000
+
+  build:
+    uses: ./.github/workflows/build.yml
