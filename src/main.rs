@@ -88,6 +88,15 @@ enum Command {
         #[usage(long)]
         json: bool,
     },
+    /// Sign in to a Writebook site. Without a terminal, run it once to get the
+    /// link to approve, then again with --code to finish
+    Login {
+        /// Site URL, like https://books.example.com
+        url: String,
+        /// The approval code Writebook showed after you approved
+        #[usage(long)]
+        code: Option<String>,
+    },
     /// Set up writebook: agent skill, shell completions, and a quick tour
     Setup,
     /// Print or install the agent skill for coding agents
@@ -174,6 +183,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Books { url, json } => read::books(&url, json),
         Command::Read { url, json } => read::read(&url, json),
         Command::Search { url, query, json } => read::search(&url, &query, json),
+        Command::Login { url, code } => creds::login_command(&web::parse_target(&url)?.host, code.as_deref()),
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),
