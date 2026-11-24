@@ -1,5 +1,6 @@
 //! Read-only commands for people and agents who only need to look things up:
-//! list a site's books, print a book or page as Markdown, and search.
+//! list a site's books and a book's contents, print a book or page as
+//! Markdown, and search.
 //! Nothing here touches a checkout or starts a browser sign-in.
 //!
 //! Reading prefers the CLI API (the book manifest and leaf JSON) when a token
@@ -15,6 +16,8 @@ use serde_json::Value;
 
 use crate::checkout;
 use crate::creds;
+use crate::inventory;
+use crate::output::{self, Format};
 use crate::plan::Manifest;
 use crate::sync;
 use crate::web::{self, Target, Web};
@@ -35,6 +38,23 @@ struct Book {
     id: u64,
     title: String,
     author: String,
+    url: String,
+}
+
+#[derive(Serialize)]
+struct Contents {
+    title: String,
+    url: String,
+    leaves: Vec<Leaf>,
+}
+
+/// One entry in a book: a page, a section or a picture.
+#[derive(Serialize)]
+struct Leaf {
+    id: u64,
+    #[serde(rename = "type")]
+    kind: String,
+    title: String,
     url: String,
 }
 
@@ -78,7 +98,7 @@ pub fn read(url: &str, json: bool) -> Result<()> {
     let target = web::parse_target(url)?;
 
     if target.book_id.is_none() {
-        bail!("'{url}' is a site, not a book or page — run `writebook books {url}` to see its books");
+        bail!("'{url}' is a site, not a book or page — run `writebook book list --instance {url}` to see its books");
     }
 
     let web = connect(&target.host)?;
@@ -97,29 +117,123 @@ pub fn read(url: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn books(url: &str, json: bool) -> Result<()> {
-    let target = web::parse_target(url)?;
-    let web = connect(&target.host)?;
+pub fn books(host: &str, format: Format) -> Result<()> {
+    let web = connect(host)?;
     let books = list_books(&web)?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&books)?);
-    } else if books.is_empty() {
-        println!("No books.");
-    } else {
-        for book in &books {
-            if book.author.is_empty() {
-                println!("- [{}]({})", book.title, book.url);
-            } else {
-                println!("- [{}]({}) by {}", book.title, book.url, book.author);
-            }
-        }
+    match format {
+        Format::Json => println!("{}", serde_json::to_string_pretty(&books)?),
+        _ if books.is_empty() => println!("No books."),
+        Format::Table => print_books_table(&books),
+        Format::Markdown => print_books_markdown(&books),
     }
 
     Ok(())
 }
 
-pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
+fn print_books_table(books: &[Book]) {
+    let mut rows = vec![["ID".to_string(), "Title".to_string(), "Author".to_string(), "URL".to_string()]];
+    rows.extend(books.iter().map(|book| [book.id.to_string(), book.title.clone(), book.author.clone(), book.url.clone()]));
+    output::print_table(&rows);
+}
+
+fn print_books_markdown(books: &[Book]) {
+    for book in books {
+        if book.author.is_empty() {
+            println!("- [{}]({})", book.title, book.url);
+        } else {
+            println!("- [{}]({}) by {}", book.title, book.url, book.author);
+        }
+    }
+}
+
+/// The pages, sections and pictures in a book, in book order. The book is a
+/// URL, or an id on the instance from --instance (or the default one).
+pub fn contents(book: &str, instance: Option<&str>, format: Format) -> Result<()> {
+    let (host, book_id) = book_on_instance(book, instance)?;
+    let web = connect(&host)?;
+
+    if !web.signed_in() {
+        bail!(
+            "listing a book's contents needs a sign-in to {host}. Sign in with `{}`, or set WRITEBOOK_TOKEN",
+            inventory::sign_in_command(&host, &inventory::profile_for(&host)?)
+        );
+    }
+
+    let Some(manifest) = get_json(&web, &format!("/books/{book_id}/manifest.json"))? else {
+        bail!("{host} has no book {book_id}, or it doesn't have the CLI API");
+    };
+    let manifest = Manifest::parse(&manifest)?;
+    let book_url = web.url(&format!("/{book_id}/{}", manifest.book.slug));
+
+    let leaves = manifest
+        .leaves
+        .iter()
+        .map(|leaf| Leaf {
+            id: leaf.id,
+            kind: leaf.kind.to_lowercase(),
+            title: leaf.title.clone(),
+            url: format!("{book_url}/{}/{}", leaf.id, checkout::slugify(&leaf.title)),
+        })
+        .collect();
+
+    let contents = Contents { title: manifest.book.title.clone(), url: book_url, leaves };
+
+    match format {
+        Format::Json => println!("{}", serde_json::to_string_pretty(&contents)?),
+        _ if contents.leaves.is_empty() => println!("{} has no pages yet.", contents.title),
+        Format::Table => print_contents_table(&contents),
+        Format::Markdown => print_contents_markdown(&contents),
+    }
+
+    Ok(())
+}
+
+fn book_on_instance(book: &str, instance: Option<&str>) -> Result<(String, u64)> {
+    if book.contains("://") {
+        let target = web::parse_target(book)?;
+
+        match target.book_id {
+            Some(book_id) => Ok((target.host, book_id)),
+            None => bail!("'{book}' is a site, not a book — run `writebook book list --instance {book}` to see its books"),
+        }
+    } else {
+        match book.parse() {
+            Ok(book_id) => Ok((inventory::host(instance)?, book_id)),
+            Err(_) => bail!("'{book}' is neither a book id nor a book URL"),
+        }
+    }
+}
+
+fn print_contents_table(contents: &Contents) {
+    let mut rows = vec![["ID".to_string(), "Type".to_string(), "Title".to_string(), "URL".to_string()]];
+    rows.extend(contents.leaves.iter().map(|leaf| [leaf.id.to_string(), capitalize(&leaf.kind), leaf.title.clone(), leaf.url.clone()]));
+    output::print_table(&rows);
+}
+
+fn print_contents_markdown(contents: &Contents) {
+    println!("# [{}]({})", contents.title, contents.url);
+    println!();
+
+    for (number, leaf) in contents.leaves.iter().enumerate() {
+        if leaf.kind == "page" {
+            println!("{}. [{}]({})", number + 1, leaf.title, leaf.url);
+        } else {
+            println!("{}. [{}]({}) ({})", number + 1, leaf.title, leaf.url, leaf.kind);
+        }
+    }
+}
+
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+pub fn search(url: &str, query: &str, format: Format) -> Result<()> {
     let target = web::parse_target(url)?;
     let web = connect(&target.host)?;
 
@@ -132,22 +246,33 @@ pub fn search(url: &str, query: &str, json: bool) -> Result<()> {
         None => search_pages(&web, target.book_id, query)?,
     };
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
-    } else if hits.is_empty() {
-        println!("No matches.");
+    match format {
+        Format::Json => println!("{}", serde_json::to_string_pretty(&hits)?),
+        _ if hits.is_empty() => {
+            println!("No matches.");
 
-        if !web.signed_in() {
-            eprintln!("note: this searched published books only. Private ones need a token (--token or WRITEBOOK_TOKEN)");
+            if !web.signed_in() {
+                eprintln!("note: this searched published books only. Private ones need a token (WRITEBOOK_TOKEN)");
+            }
         }
-    } else {
-        for hit in &hits {
-            let book = if hit.book.is_empty() { String::new() } else { format!(" ({})", hit.book) };
-            println!("- [{}]({}){book}: {}", hit.title, hit.url, hit.snippet);
-        }
+        Format::Table => print_hits_table(&hits),
+        Format::Markdown => print_hits_markdown(&hits),
     }
 
     Ok(())
+}
+
+fn print_hits_table(hits: &[Hit]) {
+    let mut rows = vec![["Book".to_string(), "Title".to_string(), "URL".to_string()]];
+    rows.extend(hits.iter().map(|hit| [hit.book.clone(), hit.title.clone(), hit.url.clone()]));
+    output::print_table(&rows);
+}
+
+fn print_hits_markdown(hits: &[Hit]) {
+    for hit in hits {
+        let book = if hit.book.is_empty() { String::new() } else { format!(" ({})", hit.book) };
+        println!("- [{}]({}){book}: {}", hit.title, hit.url, hit.snippet);
+    }
 }
 
 /// Search through the JSON endpoint: one book's, or every book's the reader
@@ -279,7 +404,7 @@ fn get_json(web: &Web, path: &str) -> Result<Option<Value>> {
     let page = web.get(path, "application/json")?;
 
     if page.status == 401 {
-        bail!("{} did not accept the token — sign in again, or check --token / WRITEBOOK_TOKEN", web.host);
+        bail!("{} did not accept the token — sign in again, or check WRITEBOOK_TOKEN", web.host);
     }
 
     if matches!(page.status, 404 | 406) {
@@ -301,7 +426,7 @@ fn api_json(web: &Web, path: &str, query: &[(&str, &str)]) -> Result<Option<Valu
     let page = web.get_query(path, "application/json", query)?;
 
     if page.status == 401 {
-        bail!("{} did not accept the token — sign in again, or check --token / WRITEBOOK_TOKEN", web.host);
+        bail!("{} did not accept the token — sign in again, or check WRITEBOOK_TOKEN", web.host);
     }
 
     if matches!(page.status, 404 | 406) || (300..400).contains(&page.status) {
@@ -369,7 +494,7 @@ fn not_readable(web: &Web, what: &str, url: &str) -> String {
     } else {
         format!(
             "{url} was not found, or it's private: the {what} may not exist, or the book isn't published. \
-             Private books need a token (--token or WRITEBOOK_TOKEN) and a Writebook with the CLI API"
+             Private books need a token (WRITEBOOK_TOKEN) and a Writebook with the CLI API"
         )
     }
 }
@@ -382,7 +507,7 @@ fn list_books(web: &Web) -> Result<Vec<Book>> {
 
         // As the library page does, which sends anonymous readers to sign in
         if books.is_empty() && !web.signed_in() {
-            bail!("{} has no published books. Listing private ones needs a token (--token or WRITEBOOK_TOKEN)", web.host);
+            bail!("{} has no published books. Listing private ones needs a token (WRITEBOOK_TOKEN)", web.host);
         }
 
         return Ok(books
@@ -402,7 +527,7 @@ fn list_books_from_library(web: &Web) -> Result<Vec<Book>> {
         if web.signed_in() {
             bail!("{} did not list any books for this token — it may not accept tokens yet", web.host);
         } else {
-            bail!("{} has no published books. Listing private ones needs a token (--token or WRITEBOOK_TOKEN)", web.host);
+            bail!("{} has no published books. Listing private ones needs a token (WRITEBOOK_TOKEN)", web.host);
         }
     }
 

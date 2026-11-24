@@ -41,8 +41,8 @@ writebook remote add|list|remove   # manage remotes
 `clone` signs in through a browser device flow: it prints a link, the user
 approves it in a signed-in browser on any device, and either types the
 approval code Writebook then shows, or waits for the CLI to notice.
-Tokens are stored per host and refresh themselves. A token from `--token` or
-`WRITEBOOK_TOKEN` replaces the browser sign-in.
+Tokens are stored per instance and profile and refresh themselves. A token
+from `WRITEBOOK_TOKEN` replaces the browser sign-in.
 
 ## Just reading
 
@@ -51,8 +51,9 @@ To look something up, don't clone. These print to stdout:
 ```sh
 writebook read <book-or-page-url>        # Markdown with title/url front matter
 writebook read <url> --json              # {title, url, markdown, source}
-writebook books <site-url> [--json]      # the site's books
-writebook search <book-or-site-url> "query" [--json]   # matching pages, with links
+writebook book list --instance <alias-or-site-url> [--json|--markdown]   # the site's books
+writebook book contents <book-url> [--json|--markdown]   # a book's pages, sections and pictures, in order (needs a sign-in)
+writebook search <book-or-site-url> "query" [--json|--markdown]   # matching pages, with links and snippets
 ```
 
 `read` accepts reading links, editing links and `.md` links. Published books
@@ -65,9 +66,9 @@ Set `WRITEBOOK_TOKEN` and `WRITEBOOK_TOKEN_HOST`. Without a token or a stored
 sign-in, commands that need one fail right away when nobody is at a terminal
 or an agent runs them; they never wait for a browser approval.
 
-To sign in with no terminal, use two steps: run `writebook login <site-url>`,
+To sign in with no terminal, use two steps: run `writebook instance add <site-url>`,
 give the user the link it prints to approve, ask them for the approval code
-Writebook shows them, then run `writebook login <site-url> --code <code>`.
+Writebook shows them, then run `writebook instance add <site-url> --code <code>`.
 
 ## A checkout
 

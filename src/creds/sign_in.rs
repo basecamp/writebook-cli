@@ -4,9 +4,9 @@
 //! machine: they can approve on any device. Afterwards Writebook shows an
 //! approval code, and typing it here finishes the sign-in. At a terminal we
 //! also keep polling, so waiting works too. Without a terminal (an agent, a
-//! script), `writebook login <site>` splits the flow in two steps: it prints
-//! the link and remembers the pending sign-in, and
-//! `writebook login <site> --code <code>` finishes it.
+//! script), `writebook instance add` splits the flow in two steps: it prints
+//! the link and remembers the pending sign-in, and running it again with
+//! `--code <code>` finishes it.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use super::{
     CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, config_dir, credentials_from, error_description, now,
-    post_token_request, request_device_authorization, someone_can_approve, store, string_field,
+    post_token_request, request_device_authorization, someone_can_approve, storage, string_field,
 };
-use crate::fsutil;
+use crate::{fsutil, inventory};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Pending {
@@ -35,7 +35,7 @@ struct Pending {
 #[derive(Serialize, Deserialize, Default)]
 struct PendingFile {
     #[serde(default)]
-    hosts: BTreeMap<String, Pending>,
+    sign_ins: BTreeMap<String, Pending>,
 }
 
 /// What came back from trying an approval code.
@@ -45,18 +45,20 @@ enum Attempt {
     NotApprovedYet,
 }
 
-/// `writebook login <site> [--code <code>]`.
-pub fn login_command(host: &str, code: Option<&str>) -> Result<()> {
+/// Sign in to a site as a profile: all at once at a terminal, otherwise in two
+/// steps, finishing with the approval code. False when only the first step
+/// is done.
+pub fn sign_in(host: &str, profile: &str, code: Option<&str>) -> Result<bool> {
     match code {
-        Some(code) => finish_pending(host, code),
-        None if someone_can_approve() => at_terminal(host).map(|_| ()),
-        None => start_pending(host),
+        Some(code) => finish_pending(host, profile, code).map(|_| true),
+        None if someone_can_approve() => at_terminal(host, profile).map(|_| true),
+        None => start_pending(host, profile).map(|_| false),
     }
 }
 
 /// The whole flow in one go, for a person at a terminal: print the link, then
 /// take the approval code they type, or notice the approval by polling.
-pub(super) fn at_terminal(host: &str) -> Result<Credentials> {
+pub(super) fn at_terminal(host: &str, profile: &str) -> Result<Credentials> {
     let pending = start(host)?;
 
     println!("Sign in to {host} to connect this device.");
@@ -113,17 +115,17 @@ pub(super) fn at_terminal(host: &str) -> Result<Credentials> {
     }
 
     let credentials = receiver.recv().context("sign-in stopped unexpectedly")??;
-    store(host, &credentials)?;
+    storage::save(host, profile, &credentials)?;
     println!("Signed in.");
     Ok(credentials)
 }
 
 /// Step one without a terminal: print the link and remember the sign-in.
-fn start_pending(host: &str) -> Result<()> {
+fn start_pending(host: &str, profile: &str) -> Result<()> {
     let pending = start(host)?;
 
     let mut file = load_pending()?;
-    file.hosts.insert(host.to_string(), pending.clone());
+    file.sign_ins.insert(pending_key(host, profile), pending.clone());
     fsutil::write_json_privately(&pending_path(), &file)?;
 
     let minutes = pending.expires_at.saturating_sub(now()).div_ceil(60);
@@ -131,32 +133,34 @@ fn start_pending(host: &str) -> Result<()> {
     println!("To sign in to {host}:");
     println!();
     println!("  1. Open {} on any device, check that it shows the code {}, and approve it.", pending.link, pending.user_code);
-    println!("  2. Writebook then shows an approval code. Finish with:");
+    println!("  2. Writebook then shows an approval code. Finish by running the same command again with:");
     println!();
-    println!("     writebook login {host} --code <approval code>");
+    println!("     --code <approval code>");
     println!();
     println!("The link works for {minutes} minutes.");
     Ok(())
 }
 
 /// Step two without a terminal: trade the approval code for a sign-in.
-fn finish_pending(host: &str, code: &str) -> Result<()> {
+fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
     let mut file = load_pending()?;
+    let key = pending_key(host, profile);
+    let login = inventory::sign_in_command(host, profile);
 
-    let Some(pending) = file.hosts.get(host).cloned() else {
-        bail!("no sign-in to {host} is waiting for a code. Start one with `writebook login {host}`");
+    let Some(pending) = file.sign_ins.get(&key).cloned() else {
+        bail!("no sign-in to {host} is waiting for a code. Start one with `{login}`");
     };
 
     if pending.expires_at <= now() {
-        file.hosts.remove(host);
+        file.sign_ins.remove(&key);
         fsutil::write_json_privately(&pending_path(), &file)?;
-        bail!("the sign-in link for {host} has expired. Start again with `writebook login {host}`");
+        bail!("the sign-in link for {host} has expired. Start again with `{login}`");
     }
 
     match try_code(host, &pending, code.trim())? {
         Attempt::SignedIn(credentials) => {
-            store(host, &credentials)?;
-            file.hosts.remove(host);
+            storage::save(host, profile, &credentials)?;
+            file.sign_ins.remove(&key);
             fsutil::write_json_privately(&pending_path(), &file)?;
             println!("Signed in to {host}.");
             Ok(())
@@ -266,6 +270,10 @@ fn open_in_browser(url: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+fn pending_key(host: &str, profile: &str) -> String {
+    format!("{host} {profile}")
 }
 
 fn load_pending() -> Result<PendingFile> {

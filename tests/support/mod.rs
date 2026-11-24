@@ -123,6 +123,7 @@ pub fn writebook(args: &[&str], env: &[(&str, &str)]) -> Output {
         .env_remove("WRITEBOOK_NO_SIGN_IN")
         .env_remove("CLAUDECODE")
         .env("XDG_CONFIG_HOME", &config)
+        .env("WRITEBOOK_NO_KEYRING", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

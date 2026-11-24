@@ -31,11 +31,13 @@ writebook pull
 writebook push
 ```
 
-Only need to look something up? `books`, `read` and `search` print Markdown
-(or JSON with `--json`) straight to stdout, no checkout needed:
+Only need to look something up? `book list`, `book contents`, `read` and
+`search` print straight to stdout, no checkout needed. The lists print a table,
+or Markdown with `--markdown`, or JSON with `--json`:
 
 ```sh
-writebook books https://books.example.com
+writebook instance add https://books.example.com --alias books
+writebook book list --instance books
 writebook read https://books.example.com/4/field-notes/12/getting-started
 writebook search https://books.example.com/4/field-notes "roll back"
 ```
@@ -47,10 +49,14 @@ completions, and prints the basics.
 
 | Command | What it does |
 |---|---|
-| `books <site-url>` | List the books on a site |
+| `instance add <url> [--alias <name>] [--code <code>]` | Sign in to an instance and add it; without a terminal, in two steps (link, then code) |
+| `instance list/remove/set-default` | List instances, sign out of one and remove it, pick the default |
+| `profile add <name> [--code <code>]` | Sign in to an instance as another profile |
+| `profile list/remove/set-default` | List profiles, sign out of one and remove it, pick the default |
+| `book list [--instance <instance>]` | List the books on an instance |
+| `book contents <book-id-or-url> [--instance <instance>]` | List a book's pages, sections and pictures, in order |
 | `read <url>` | Print a book or one page as Markdown |
 | `search <url> <query>` | Search a book, or every book on a site |
-| `login <site-url> [--code <code>]` | Sign in; without a terminal, in two steps (link, then code) |
 | `setup` | Install the agent skill + shell completions, print a quick tour |
 | `skill print/install` | Print the embedded SKILL.md, or install it for coding agents |
 | `clone <book-url> [dir]` | Sign in (browser device flow) and download the book |
@@ -107,8 +113,30 @@ Authentication is an OAuth device flow. The CLI prints a link, and you
 approve it in a signed-in browser on any device: nothing has to open on the
 machine the CLI runs on. Writebook then shows an approval code; type it into
 the CLI to finish, or just wait for the CLI to notice the approval. Tokens land
-in `~/.config/writebook/credentials.json` and refresh themselves. No token ever
+in the system keyring (or `~/.config/writebook/credentials.json` when there is
+none) and refresh themselves. No token ever
 lives inside a checkout.
+
+### Instances and profiles
+
+Writebook is self-hosted, so the CLI keeps an inventory of the instances you
+use in `~/.config/writebook/instances.toml`. The first one you add becomes the
+default, used whenever you don't pass `--instance`. `--instance` takes an alias
+or a URL; a URL works even when it isn't in the inventory.
+
+Adding an instance signs in to it, and removing one signs out. Adding one
+that's already there signs in again.
+
+Each instance has one or more profiles: separate sign-ins to the same site.
+The first is called `default`, unless you name it with `--profile` when adding
+the instance. Pick another one with `--profile` on any command.
+
+```sh
+writebook instance add https://books.example.com --alias work
+writebook profile add editor --instance work
+writebook book list --profile editor        # work is the default instance
+writebook profile set-default editor --instance work
+```
 
 ### Signing in without a terminal
 
@@ -116,8 +144,8 @@ Where nothing can type into the CLI (an agent, a script), sign in in two
 steps:
 
 ```sh
-writebook login https://books.example.com                  # prints the link to approve
-writebook login https://books.example.com --code WXYZ-2345 # the code Writebook showed
+writebook instance add https://books.example.com                  # prints the link to approve
+writebook instance add https://books.example.com --code WXYZ-2345 # the code Writebook showed
 ```
 
 The link works for 10 minutes. Approval codes need a Writebook with
@@ -125,14 +153,12 @@ basecamp/writebook#516; older ones still sign in by waiting at a terminal.
 
 ### Tokens, for agents and scripts
 
-`WRITEBOOK_TOKEN` (or `--token`) replaces the stored sign-in for any command:
+`WRITEBOOK_TOKEN` replaces the stored sign-in for any command:
 the token is sent as is, never refreshed and never stored. Name the site it
-belongs to with `WRITEBOOK_TOKEN_HOST` (or `--token-host`), like
+belongs to with `WRITEBOOK_TOKEN_HOST`, like
 `https://books.example.com`: the token is only ever sent there, so following a
 link to another site can't leak it, and never over plain http except to this
-machine. Prefer the environment variable to the flag, which other users on the
-machine can see in the process list. When
-there's no token and no stored sign-in, the browser sign-in only starts if
+machine. When there's no token and no stored sign-in, the browser sign-in only starts if
 someone is at a terminal to approve it. Run unattended (no terminal, or `CI`,
 `CLAUDECODE` or `WRITEBOOK_NO_SIGN_IN` set), the CLI exits with an error right
 away instead of waiting.
@@ -147,7 +173,7 @@ or either with `.md`, `?search=` or `#anchor` on the end.
   export (a page's link plus `.md`), which serves published books without
   signing in.
 
-`books` and `search` use Writebook's JSON book list and search
+`book list` and `search` use Writebook's JSON book list and search
 (`/books.json`, `/search.json` and `/books/:id/search.json`), which a
 read-only token may call. Searching a whole site is one request and returns
 the best 50 matches across its books. On a Writebook without them, they read
@@ -158,7 +184,7 @@ token cannot send that form. Without a token they see published books only.
 
 Syncing (`clone`, `pull`, `push`) needs the CLI API (OAuth device flow, the
 book manifest, and JSON leaf CRUD) — shipped in the companion Writebook
-changes. `books`, `read` and `search` work with any recent Writebook, for
+changes. `book list`, `read` and `search` work with any recent Writebook, for
 published books.
 
 ## Building

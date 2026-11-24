@@ -6,9 +6,13 @@ mod creds;
 mod diff_cmd;
 mod fsutil;
 mod index;
+mod instance;
+mod inventory;
 mod merge;
+mod output;
 mod plan;
 mod pull;
+mod profile;
 mod push;
 mod read;
 mod remote;
@@ -22,23 +26,35 @@ use anyhow::Result;
 use std::path::PathBuf;
 use usage::{Cli, Subcommands};
 
+use output::Format;
+
 /// Sync Writebook books to disk like git repositories
 #[derive(Cli)]
-#[usage(bin = "writebook", version, unknown_flags = "error", completion)]
+#[usage(bin = "writebook", version, unknown_flags = "error", completion, subcommand_help_heading = "Online commands", disable_help_subcommand)]
 struct Cli {
-    /// Token to use instead of signing in (for agents and scripts)
-    #[usage(long, global, env = "WRITEBOOK_TOKEN")]
-    token: Option<String>,
-    /// The site the token is for, like https://books.example.com; it is never sent elsewhere
-    #[usage(long, global, env = "WRITEBOOK_TOKEN_HOST")]
-    token_host: Option<String>,
+    /// Profile to sign in as, instead of the instance's default one
+    #[usage(long, global, env = "WRITEBOOK_PROFILE")]
+    profile: Option<String>,
     #[usage(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommands)]
 enum Command {
+    /// Manage the Writebook instances you use
+    #[usage(help_heading = "Auth commands")]
+    Instance {
+        #[usage(subcommand)]
+        command: InstanceCommand,
+    },
+    /// Manage an instance's profiles, separate sign-ins to the same site
+    #[usage(help_heading = "Auth commands")]
+    Profile {
+        #[usage(subcommand)]
+        command: ProfileCommand,
+    },
     /// Clone a book from a Writebook site into a new directory
+    #[usage(help_heading = "Local commands")]
     Clone {
         /// Book URL, like https://books.example.com/4/some-book
         url: String,
@@ -46,29 +62,31 @@ enum Command {
         directory: Option<PathBuf>,
     },
     /// Manage the remotes this checkout syncs with
+    #[usage(help_heading = "Local commands")]
     Remote {
         #[usage(subcommand)]
         command: RemoteCommand,
     },
     /// Fetch remote changes and merge them into your files
+    #[usage(help_heading = "Local commands")]
     Pull,
     /// Upload your local changes to the remote
+    #[usage(help_heading = "Local commands")]
     Push,
     /// Show what changed locally and remotely since the last sync
+    #[usage(help_heading = "Local commands")]
     Status,
     /// Show local changes since the last sync
+    #[usage(help_heading = "Local commands")]
     Diff {
         /// Diff the remote's changes instead of yours
         #[usage(long)]
         remote: bool,
     },
-    /// List the books on a Writebook site
-    Books {
-        /// Site URL, like https://books.example.com
-        url: String,
-        /// Print JSON instead of Markdown
-        #[usage(long)]
-        json: bool,
+    /// Work with the books on an instance
+    Book {
+        #[usage(subcommand)]
+        command: BookCommand,
     },
     /// Print a book or one page as Markdown, without cloning
     Read {
@@ -84,30 +102,27 @@ enum Command {
         url: String,
         /// What to look for
         query: String,
-        /// Print JSON instead of Markdown
-        #[usage(long)]
+        /// Print JSON
+        #[usage(long, conflicts = "markdown")]
         json: bool,
-    },
-    /// Sign in to a Writebook site. Without a terminal, run it once to get the
-    /// link to approve, then again with --code to finish
-    Login {
-        /// Site URL, like https://books.example.com
-        url: String,
-        /// The approval code Writebook showed after you approved
+        /// Print Markdown
         #[usage(long)]
-        code: Option<String>,
+        markdown: bool,
     },
     /// Set up writebook: agent skill, shell completions, and a quick tour
+    #[usage(help_heading = "Setup commands")]
     Setup,
-    /// Print or install the agent skill for coding agents
-    Skill {
-        #[usage(subcommand)]
-        command: SkillCommand,
-    },
     /// Print or install shell completions
+    #[usage(help_heading = "Setup commands")]
     ShellCompletion {
         #[usage(subcommand)]
         command: ShellCompletionCommand,
+    },
+    /// Print or install the agent skill for coding agents
+    #[usage(help_heading = "Agent commands")]
+    Skill {
+        #[usage(subcommand)]
+        command: SkillCommand,
     },
 }
 
@@ -117,6 +132,110 @@ enum SkillCommand {
     Print,
     /// Install the skill into ~/.agents/skills (and link it for Claude Code)
     Install,
+}
+
+#[derive(Subcommands)]
+enum InstanceCommand {
+    /// Sign in to an instance and add it; the first one becomes the default.
+    /// Without a terminal, run it once to get the link to approve, then again
+    /// with --code to finish
+    Add {
+        /// Site URL, like https://books.example.com, or the alias of one you added
+        url: String,
+        /// Short name for it (defaults to its host name)
+        #[usage(long)]
+        alias: Option<String>,
+        /// The approval code Writebook showed after you approved
+        #[usage(long)]
+        code: Option<String>,
+    },
+    /// List instances and whether you're signed in to each
+    List {
+        /// Print JSON
+        #[usage(long, conflicts = "markdown")]
+        json: bool,
+        /// Print Markdown
+        #[usage(long)]
+        markdown: bool,
+    },
+    /// Sign out of an instance, all its profiles, and remove it
+    Remove {
+        /// Instance alias or URL
+        instance: String,
+    },
+    /// Use this instance when --instance isn't given
+    SetDefault {
+        /// Instance alias or URL
+        instance: String,
+    },
+}
+
+#[derive(Subcommands)]
+enum ProfileCommand {
+    /// Sign in to an instance as another profile. Without a terminal, run it
+    /// once to get the link to approve, then again with --code to finish
+    Add {
+        /// Profile name, like editor
+        name: String,
+        /// Instance alias or URL (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
+        /// The approval code Writebook showed after you approved
+        #[usage(long)]
+        code: Option<String>,
+    },
+    /// List an instance's profiles; * marks the default
+    List {
+        /// Instance alias or URL (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
+    },
+    /// Sign out of a profile and remove it
+    Remove {
+        /// Profile name
+        name: String,
+        /// Instance alias or URL (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
+    },
+    /// Use this profile when --profile isn't given
+    SetDefault {
+        /// Profile name
+        name: String,
+        /// Instance alias or URL (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Subcommands)]
+enum BookCommand {
+    /// List a book's pages, sections and pictures, in order
+    Contents {
+        /// Book id on the instance, or a book URL like https://books.example.com/4/some-book
+        book: String,
+        /// Instance alias or URL, for a book id (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
+        /// Print JSON
+        #[usage(long, conflicts = "markdown")]
+        json: bool,
+        /// Print Markdown
+        #[usage(long)]
+        markdown: bool,
+    },
+    /// List the books on an instance
+    List {
+        /// Instance alias or URL (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
+        /// Print JSON
+        #[usage(long, conflicts = "markdown")]
+        json: bool,
+        /// Print Markdown
+        #[usage(long)]
+        markdown: bool,
+    },
 }
 
 #[derive(Subcommands)]
@@ -165,9 +284,11 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    if let Some(token) = &cli.token {
-        creds::use_token(token, cli.token_host.as_deref());
+    if let Ok(token) = std::env::var("WRITEBOOK_TOKEN") {
+        creds::use_token(&token, std::env::var("WRITEBOOK_TOKEN_HOST").ok().as_deref());
     }
+
+    inventory::select_profile(cli.profile.as_deref());
 
     match cli.command {
         Command::Clone { url, directory } => clone::run(&url, directory.as_deref()),
@@ -180,10 +301,24 @@ fn run(cli: Cli) -> Result<()> {
         Command::Push => push::run(),
         Command::Status => status::run(),
         Command::Diff { remote } => diff_cmd::run(remote),
-        Command::Books { url, json } => read::books(&url, json),
+        Command::Instance { command } => match command {
+            InstanceCommand::Add { url, alias, code } => instance::add(&url, alias.as_deref(), cli.profile.as_deref(), code.as_deref()),
+            InstanceCommand::List { json, markdown } => instance::list(Format::from_flags(json, markdown)),
+            InstanceCommand::Remove { instance } => instance::remove(&instance),
+            InstanceCommand::SetDefault { instance } => instance::set_default(&instance),
+        },
+        Command::Profile { command } => match command {
+            ProfileCommand::Add { name, instance, code } => profile::add(&name, instance.as_deref(), code.as_deref()),
+            ProfileCommand::List { instance } => profile::list(instance.as_deref()),
+            ProfileCommand::Remove { name, instance } => profile::remove(&name, instance.as_deref()),
+            ProfileCommand::SetDefault { name, instance } => profile::set_default(&name, instance.as_deref()),
+        },
+        Command::Book { command } => match command {
+            BookCommand::List { instance, json, markdown } => read::books(&inventory::host(instance.as_deref())?, Format::from_flags(json, markdown)),
+            BookCommand::Contents { book, instance, json, markdown } => read::contents(&book, instance.as_deref(), Format::from_flags(json, markdown)),
+        },
         Command::Read { url, json } => read::read(&url, json),
-        Command::Search { url, query, json } => read::search(&url, &query, json),
-        Command::Login { url, code } => creds::login_command(&web::parse_target(&url)?.host, code.as_deref()),
+        Command::Search { url, query, json, markdown } => read::search(&url, &query, Format::from_flags(json, markdown)),
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),

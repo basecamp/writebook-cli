@@ -51,7 +51,7 @@ fn reads_a_whole_published_book() {
 fn lists_published_books_only() {
     let Some(url) = live_url() else { return };
 
-    let output = writebook(&["books", "--json", &url], &[]);
+    let output = writebook(&["book", "list", "--json", "--instance", &url], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
     let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();

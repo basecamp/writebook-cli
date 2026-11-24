@@ -1,10 +1,12 @@
-//! Per-host OAuth credentials, obtained through the RFC 8628 device flow and
-//! refreshed transparently. Stored in ~/.config/writebook/credentials.json so
-//! several checkouts share one login and no token ever lives inside a checkout.
+//! OAuth credentials per site and profile, obtained through the RFC 8628
+//! device flow and refreshed transparently. Kept in the system keyring (see
+//! storage.rs) so several checkouts share one login and no token ever lives
+//! inside a checkout. Which profile a site is signed in as comes from the
+//! inventory (see inventory.rs).
 //!
-//! A token given with --token or WRITEBOOK_TOKEN wins over all of that: it's
+//! A token given in WRITEBOOK_TOKEN wins over all of that: it's
 //! used as-is, never refreshed, and nothing is stored. It belongs to one site,
-//! named with --token-host or WRITEBOOK_TOKEN_HOST, and is never sent anywhere
+//! named in WRITEBOOK_TOKEN_HOST, and is never sent anywhere
 //! else, nor over plain http except to this machine. And the browser sign-in
 //! only starts when someone is at a terminal to approve it; unattended runs
 //! get an error instead of a wait.
@@ -12,17 +14,17 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api;
-use crate::fsutil;
+use crate::inventory;
 
 mod sign_in;
-pub use sign_in::login_command;
+mod storage;
+pub use sign_in::sign_in;
 
 const CLIENT_ID: &str = "writebook-cli";
 const DEVICE_CODE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -33,12 +35,6 @@ static GIVEN_TOKEN: OnceLock<GivenToken> = OnceLock::new();
 struct GivenToken {
     token: String,
     host: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct CredentialsFile {
-    #[serde(default)]
-    hosts: BTreeMap<String, Credentials>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -66,12 +62,7 @@ fn given_token(host: &str) -> Result<Option<String>> {
     };
 
     let Some(token_host) = &given.host else {
-        bail!(
-            "say which site the token is for, so it is never sent anywhere else: \
-             --token-host {} or WRITEBOOK_TOKEN_HOST={}",
-            normalize_host(host),
-            normalize_host(host)
-        );
+        bail!("say which site the token is for, so it is never sent anywhere else: WRITEBOOK_TOKEN_HOST={}", normalize_host(host));
     };
 
     if *token_host != normalize_host(host) {
@@ -102,15 +93,15 @@ pub fn access_token(host: &str) -> Result<String> {
         return Ok(token);
     }
 
-    let file = load()?;
+    let profile = inventory::profile_for(host)?;
 
-    match file.hosts.get(host) {
-        Some(credentials) if !expired(credentials) => Ok(credentials.access_token.clone()),
-        Some(credentials) => match refresh(host, &credentials.refresh_token) {
+    match storage::load(host, &profile)? {
+        Some(credentials) if !expired(&credentials) => Ok(credentials.access_token),
+        Some(credentials) => match refresh(host, &profile, &credentials.refresh_token) {
             Ok(refreshed) => Ok(refreshed.access_token),
-            Err(_) => Ok(login(host)?.access_token),
+            Err(_) => Ok(login(host, &profile)?.access_token),
         },
-        None => Ok(login(host)?.access_token),
+        None => Ok(login(host, &profile)?.access_token),
     }
 }
 
@@ -118,17 +109,17 @@ pub fn access_token(host: &str) -> Result<String> {
 /// looked fresh, so rotate the refresh token or fall back to signing in again.
 pub fn renewed_access_token(host: &str) -> Result<String> {
     if given_token(host)?.is_some() {
-        bail!("{host} did not accept the token from --token or WRITEBOOK_TOKEN");
+        bail!("{host} did not accept the token from WRITEBOOK_TOKEN");
     }
 
-    let file = load()?;
+    let profile = inventory::profile_for(host)?;
 
-    match file.hosts.get(host) {
-        Some(credentials) => match refresh(host, &credentials.refresh_token) {
+    match storage::load(host, &profile)? {
+        Some(credentials) => match refresh(host, &profile, &credentials.refresh_token) {
             Ok(refreshed) => Ok(refreshed.access_token),
-            Err(_) => Ok(login(host)?.access_token),
+            Err(_) => Ok(login(host, &profile)?.access_token),
         },
-        None => Ok(login(host)?.access_token),
+        None => Ok(login(host, &profile)?.access_token),
     }
 }
 
@@ -140,12 +131,14 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
         return Ok(Some(token));
     }
 
-    let Some(credentials) = load()?.hosts.get(host).cloned() else {
+    let profile = inventory::profile_for(host)?;
+
+    let Some(credentials) = storage::load(host, &profile)? else {
         return Ok(None);
     };
 
     if expired(&credentials) {
-        match refresh(host, &credentials.refresh_token) {
+        match refresh(host, &profile, &credentials.refresh_token) {
             Ok(refreshed) => Ok(Some(refreshed.access_token)),
             Err(error) => {
                 eprintln!("note: could not renew your sign-in to {host} ({error:#}); reading without it");
@@ -157,19 +150,31 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
     }
 }
 
-fn login(host: &str) -> Result<Credentials> {
+/// Whether there's a stored sign-in to this site as this profile. It may
+/// have expired; it's renewed when used.
+pub fn signed_in(host: &str, profile: &str) -> Result<bool> {
+    Ok(storage::load(host, profile)?.is_some())
+}
+
+/// Sign out of a site as this profile.
+pub fn forget(host: &str, profile: &str) -> Result<()> {
+    storage::delete(host, profile)
+}
+
+fn login(host: &str, profile: &str) -> Result<Credentials> {
     if !someone_can_approve() {
         bail!(
             "not signed in to {host}, and nobody is at a terminal to approve a browser sign-in. \
              Set WRITEBOOK_TOKEN and WRITEBOOK_TOKEN_HOST, run this once in a terminal to sign in, \
-             or sign in in two steps with `writebook login {host}`"
+             or sign in in two steps with `{}`",
+            inventory::sign_in_command(host, profile)
         );
     }
 
-    sign_in::at_terminal(host)
+    sign_in::at_terminal(host, profile)
 }
 
-fn refresh(host: &str, refresh_token: &str) -> Result<Credentials> {
+fn refresh(host: &str, profile: &str, refresh_token: &str) -> Result<Credentials> {
     let (status, body) = post_token_request(
         host,
         &[
@@ -184,7 +189,7 @@ fn refresh(host: &str, refresh_token: &str) -> Result<Credentials> {
     }
 
     let credentials = credentials_from(&body)?;
-    store(host, &credentials)?;
+    storage::save(host, profile, &credentials)?;
     Ok(credentials)
 }
 
@@ -224,28 +229,7 @@ fn expired(credentials: &Credentials) -> bool {
     credentials.expires_at <= now() + EXPIRY_SLACK
 }
 
-fn store(host: &str, credentials: &Credentials) -> Result<()> {
-    let mut file = load()?;
-    file.hosts.insert(host.to_string(), credentials.clone());
-    fsutil::write_json_privately(&credentials_path(), &file)
-}
-
-fn load() -> Result<CredentialsFile> {
-    let path = credentials_path();
-
-    if path.exists() {
-        let contents = fsutil::read_to_string(&path)?;
-        serde_json::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))
-    } else {
-        Ok(CredentialsFile::default())
-    }
-}
-
-fn credentials_path() -> PathBuf {
-    config_dir().join("credentials.json")
-}
-
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|it| !it.is_empty()) {
         PathBuf::from(dir).join("writebook")
     } else {
