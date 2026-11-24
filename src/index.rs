@@ -2,16 +2,18 @@
 //! book's metadata, and the lines below are the table of contents — one line
 //! per leaf, and line order is leaf order. Sections are headings (linked to a
 //! file when they have body text of their own), pages are links, and pictures
-//! are images whose alt text is the caption:
+//! are images whose alt text is the caption. A section can end with a
+//! `{theme=...}` attribute, and the front matter can name a cover image:
 //!
 //!   ---
 //!   title: The Field Guide
 //!   subtitle:
 //!   author: Stanko
 //!   theme: green
+//!   cover: assets/cover.jpg
 //!   ---
 //!
-//!   # Part One
+//!   # Part One {theme=blue}
 //!   # [Part Two](part-two.md)
 //!   [Getting Started](getting-started.md)
 //!   ![A sunset over the bay](assets/sunset.jpg)
@@ -27,7 +29,7 @@ pub struct Document {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
-    Section { title: String, filename: Option<String> },
+    Section { title: String, filename: Option<String>, theme: Option<String> },
     Page { title: String, filename: String },
     Picture { caption: String, filename: String },
 }
@@ -108,15 +110,21 @@ fn serialize_entries(entries: &[Entry]) -> String {
 
     for entry in entries {
         match entry {
-            Entry::Section { title, filename } => {
+            Entry::Section { title, filename, theme } => {
                 if !text.is_empty() {
                     text.push('\n');
                 }
 
                 match filename {
-                    Some(filename) => text.push_str(&format!("# [{title}]({filename})\n")),
-                    None => text.push_str(&format!("# {title}\n")),
+                    Some(filename) => text.push_str(&format!("# [{title}]({filename})")),
+                    None => text.push_str(&format!("# {title}")),
                 }
+
+                if let Some(theme) = theme {
+                    text.push_str(&format!(" {{theme={theme}}}"));
+                }
+
+                text.push('\n');
             }
             Entry::Page { title, filename } => text.push_str(&format!("[{title}]({filename})\n")),
             Entry::Picture { caption, filename } => text.push_str(&format!("![{caption}]({filename})\n")),
@@ -128,14 +136,14 @@ fn serialize_entries(entries: &[Entry]) -> String {
 
 fn parse_line(line: &str) -> Option<Entry> {
     if let Some(heading) = line.strip_prefix('#') {
-        let heading = heading.trim_start_matches('#').trim();
+        let (heading, theme) = split_theme(heading.trim_start_matches('#').trim());
 
         if let Some(rest) = heading.strip_prefix('[') {
             let (title, filename) = split_link(rest)?;
-            return Some(Entry::Section { title, filename: Some(filename) });
+            return Some(Entry::Section { title, filename: Some(filename), theme });
         }
 
-        return Some(Entry::Section { title: heading.to_string(), filename: None });
+        return Some(Entry::Section { title: heading.to_string(), filename: None, theme });
     }
 
     if let Some(rest) = line.strip_prefix("![") {
@@ -149,6 +157,17 @@ fn parse_line(line: &str) -> Option<Entry> {
     }
 
     None
+}
+
+/// A section heading without its trailing `{theme=...}`, and the theme.
+fn split_theme(heading: &str) -> (&str, Option<String>) {
+    if let Some(attribute) = heading.strip_suffix('}') {
+        if let Some((rest, theme)) = attribute.rsplit_once("{theme=") {
+            return (rest.trim_end(), Some(theme.trim().to_string()));
+        }
+    }
+
+    (heading, None)
 }
 
 fn split_link(rest: &str) -> Option<(String, String)> {
@@ -185,8 +204,8 @@ mod tests {
         assert_eq!(
             document.entries,
             vec![
-                Entry::Section { title: "Part One".into(), filename: None },
-                Entry::Section { title: "Part Two".into(), filename: Some("part-two.md".into()) },
+                Entry::Section { title: "Part One".into(), filename: None, theme: None },
+                Entry::Section { title: "Part Two".into(), filename: Some("part-two.md".into()), theme: None },
                 Entry::Page { title: "Getting Started".into(), filename: "getting-started.md".into() },
                 Entry::Picture { caption: "A sunset".into(), filename: "assets/sunset.jpg".into() },
             ]
@@ -216,8 +235,24 @@ mod tests {
     }
 
     #[test]
+    fn reads_a_sections_theme() {
+        let document = parse(&with_meta("# Part One {theme=green}\n# [Part Two](part-two.md) {theme=blue}\n# Sets {and} maps\n")).unwrap();
+
+        assert_eq!(
+            document.entries,
+            vec![
+                Entry::Section { title: "Part One".into(), filename: None, theme: Some("green".into()) },
+                Entry::Section { title: "Part Two".into(), filename: Some("part-two.md".into()), theme: Some("blue".into()) },
+                Entry::Section { title: "Sets {and} maps".into(), filename: None, theme: None },
+            ]
+        );
+    }
+
+    #[test]
     fn round_trips() {
-        let text = with_meta("# Part One\n[Getting Started](getting-started.md)\n![A sunset](assets/sunset.jpg)\n\n# [Part Two](part-two.md)\n");
+        let text = with_meta(
+            "# Part One {theme=green}\n[Getting Started](getting-started.md)\n![A sunset](assets/sunset.jpg)\n\n# [Part Two](part-two.md)\n",
+        );
         let document = parse(&text).unwrap();
         assert_eq!(serialize(&document.meta, &document.entries), text);
     }

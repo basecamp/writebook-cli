@@ -69,7 +69,11 @@ impl LeafState {
                 .filename
                 .clone()
                 .map(|filename| crate::index::Entry::Page { title: self.title.clone(), filename }),
-            "Section" => Some(crate::index::Entry::Section { title: self.title.clone(), filename: self.filename.clone() }),
+            "Section" => Some(crate::index::Entry::Section {
+                title: self.title.clone(),
+                filename: self.filename.clone(),
+                theme: self.theme.clone(),
+            }),
             "Picture" => self
                 .filename
                 .clone()
@@ -212,6 +216,16 @@ pub struct BookMeta {
     pub subtitle: String,
     pub author: String,
     pub theme: String,
+    /// The cover image in assets/, empty for no cover. None when index.md
+    /// has no `cover:` line (checkouts made before it existed), which leaves
+    /// the cover to the file tracked in state.
+    pub cover: Option<String>,
+}
+
+impl BookMeta {
+    pub fn without_cover(&self) -> BookMeta {
+        BookMeta { cover: None, ..self.clone() }
+    }
 }
 
 pub fn parse_book_md(text: &str) -> BookMeta {
@@ -226,6 +240,7 @@ pub fn parse_book_md(text: &str) -> BookMeta {
                 "subtitle" => meta.subtitle = value,
                 "author" => meta.author = value,
                 "theme" => meta.theme = value,
+                "cover" => meta.cover = Some(value),
                 _ => {}
             }
         }
@@ -235,10 +250,14 @@ pub fn parse_book_md(text: &str) -> BookMeta {
 }
 
 pub fn serialize_book_md(meta: &BookMeta) -> String {
-    format!(
-        "---\ntitle: {}\nsubtitle: {}\nauthor: {}\ntheme: {}\n---\n",
-        meta.title, meta.subtitle, meta.author, meta.theme
-    )
+    let mut text = format!("---\ntitle: {}\nsubtitle: {}\nauthor: {}\ntheme: {}\n", meta.title, meta.subtitle, meta.author, meta.theme);
+
+    if let Some(cover) = &meta.cover {
+        text.push_str(&format!("cover: {cover}\n"));
+    }
+
+    text.push_str("---\n");
+    text
 }
 
 pub fn slugify(title: &str) -> String {

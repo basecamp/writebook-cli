@@ -15,6 +15,7 @@ pub fn agent() -> ureq::Agent {
         .http_status_as_error(false)
         .timeout_connect(Some(std::time::Duration::from_secs(10)))
         .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
+        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
         .user_agent(USER_AGENT)
         .build()
         .new_agent()

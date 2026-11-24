@@ -33,7 +33,7 @@ fn reads_json() {
     let server = Server::start(|_| reply(200, PAGE_MD));
 
     let output = writebook(&["read", "--json", &format!("{}/4/handbook/12/on-call", server.url)], &[]);
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
 
     assert_eq!(json["title"], "On & off call");
     assert_eq!(json["url"], "http://books.test/4/handbook/12/on-call");
@@ -67,29 +67,10 @@ fn reads_through_the_api_with_a_token() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json["markdown"], "# Private steps\n");
     assert_eq!(json["url"], format!("{}/4/handbook/12/on-call", server.url));
     assert_eq!(json["source"], "api");
-}
-
-#[test]
-fn the_token_flag_wins_over_the_environment() {
-    let server = Server::start(|request| match request.header("Authorization") {
-        Some("Bearer from-flag") => reply(404, ""),
-        _ => reply(401, ""),
-    });
-
-    let output = writebook(
-        &["--token", "from-flag", "read", &format!("{}/4/handbook", server.url)],
-        &[("WRITEBOOK_TOKEN", "from-env"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
-    );
-
-    // 404 from the API means "no API here", so it falls back to the export,
-    // which 404s too: an error, but one about the page, not the token.
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("was not found"), "{}", stderr(&output));
-    assert!(server.requests().iter().all(|it| it.header("Authorization") == Some("Bearer from-flag")));
 }
 
 #[test]
@@ -196,10 +177,18 @@ fn lists_books() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["books", &server.url], &[]);
+    let table = writebook(&["book", "list", "--instance", &server.url], &[]);
+    assert!(table.status.success(), "{}", stderr(&table));
+    assert_eq!(
+        stdout(&table),
+        format!("ID  Title         Author     URL\n4   Ops Handbook  37signals  {}/4/ops-handbook\n", server.url)
+    );
 
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), format!("- [Ops Handbook]({}/4/ops-handbook) by 37signals\n", server.url));
+    let markdown = writebook(&["book", "list", "--instance", &server.url, "--markdown"], &[]);
+    assert_eq!(stdout(&markdown), format!("- [Ops Handbook]({}/4/ops-handbook) by 37signals\n", server.url));
+
+    let both = writebook(&["book", "list", "--instance", &server.url, "--markdown", "--json"], &[]);
+    assert!(!both.status.success(), "--json and --markdown are one or the other");
 }
 
 #[test]
@@ -228,10 +217,10 @@ fn searches_a_book_like_a_browser_when_there_is_no_token() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["search", "--json", &format!("{}/4/handbook", server.url), "roll back"], &[]);
+    let output = writebook(&["search", "roll back", "--json", "--book", &format!("{}/4/handbook", server.url)], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json[0]["title"], "Deploys");
     assert_eq!(json[0]["url"], format!("{}/4/handbook/12/deploys", server.url));
     assert_eq!(json[0]["snippet"], "how to roll back");
@@ -284,7 +273,7 @@ fn explains_a_site_with_no_published_books() {
     // Writebook sends anonymous readers to sign in when nothing is published.
     let server = Server::start(|_| redirect("/session/new"));
 
-    let output = writebook(&["books", &server.url], &[]);
+    let output = writebook(&["book", "list", "--instance", &server.url], &[]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("has no published books"), "{}", stderr(&output));
@@ -307,7 +296,10 @@ fn lists_books_from_json_with_a_token() {
         }
     });
 
-    let output = writebook(&["books", &server.url], &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)]);
+    let output = writebook(
+        &["book", "list", "--markdown", "--instance", &server.url],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "- [Ops Handbook](http://books.test/4/ops-handbook)\n");
@@ -321,7 +313,7 @@ fn explains_a_site_with_no_published_books_from_json() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["books", &server.url], &[]);
+    let output = writebook(&["book", "list", "--instance", &server.url], &[]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("has no published books"), "{}", stderr(&output));
@@ -334,7 +326,7 @@ fn says_private_books_need_a_token_when_an_anonymous_search_finds_nothing() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["search", &server.url, "failover"], &[]);
+    let output = writebook(&["search", "failover", "--instance", &server.url], &[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "No matches.\n");
@@ -359,11 +351,13 @@ fn searches_every_book_in_one_json_request() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["search", &server.url, "roll back"], &[]);
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "- [Deploys](http://books.test/4/handbook/12/deploys) (Handbook): how to roll back\n");
+    let table = writebook(&["search", "roll back", "--instance", &server.url], &[]);
+    assert!(table.status.success(), "{}", stderr(&table));
+    assert_eq!(stdout(&table), "Book      Title    URL\nHandbook  Deploys  http://books.test/4/handbook/12/deploys\n");
     assert_eq!(server.requests().len(), 1);
+
+    let markdown = writebook(&["search", "roll back", "--markdown", "--instance", &server.url], &[]);
+    assert_eq!(stdout(&markdown), "- [Deploys](http://books.test/4/handbook/12/deploys) (Handbook): how to roll back\n");
 }
 
 #[test]
@@ -386,15 +380,129 @@ fn searches_a_book_through_json_with_a_read_only_token() {
     });
 
     let output = writebook(
-        &["search", "--json", &format!("{}/4/handbook", server.url), "roll"],
+        &["search", "roll", "--json", "--book", &format!("{}/4/handbook", server.url)],
         &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
     );
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json[0]["title"], "Deploys");
     assert_eq!(json[0]["book"], "");
     assert_eq!(json[0]["url"], "http://books.test/4/handbook/12/deploys");
     assert_eq!(json[0]["snippet"], "how to roll back");
     assert!(server.requests().iter().all(|request| request.method == "GET"));
+}
+
+fn book_with_three_kinds_of_leaves() -> Server {
+    Server::start(|request| {
+        if request.header("Authorization") != Some("Bearer secret") {
+            return reply(302, "");
+        }
+
+        match request.path.as_str() {
+            "/books/4/manifest.json" => reply(
+                200,
+                r#"{"book":{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","theme":"blue","slug":"handbook","fingerprint":"f","cover":null},
+                    "leaves":[{"id":11,"title":"On call","type":"Section","fingerprint":"a","theme":"blue"},
+                              {"id":12,"title":"Paging","type":"Page","fingerprint":"b"},
+                              {"id":13,"title":"Rotation chart","type":"Picture","fingerprint":"c","image":null}]}"#,
+            ),
+            _ => reply(404, ""),
+        }
+    })
+}
+
+#[test]
+fn lists_a_books_contents_by_url() {
+    let server = book_with_three_kinds_of_leaves();
+
+    let env = [("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", server.url.as_str())];
+    let book = format!("{}/4/handbook", server.url);
+
+    let table = writebook(&["book", "contents", &book], &env);
+    assert!(table.status.success(), "{}", stderr(&table));
+    assert_eq!(
+        stdout(&table),
+        format!(
+            "ID  Type     Title           URL\n\
+             11  Section  On call         {0}/4/handbook/11/on-call\n\
+             12  Page     Paging          {0}/4/handbook/12/paging\n\
+             13  Picture  Rotation chart  {0}/4/handbook/13/rotation-chart\n",
+            server.url
+        )
+    );
+
+    let markdown = writebook(&["book", "contents", &book, "--markdown"], &env);
+    assert_eq!(
+        stdout(&markdown),
+        format!(
+            "# [Handbook]({0}/4/handbook)\n\n\
+             1. [On call]({0}/4/handbook/11/on-call) (section)\n\
+             2. [Paging]({0}/4/handbook/12/paging)\n\
+             3. [Rotation chart]({0}/4/handbook/13/rotation-chart) (picture)\n",
+            server.url
+        )
+    );
+}
+
+#[test]
+fn lists_a_books_contents_by_id_on_an_instance() {
+    let server = book_with_three_kinds_of_leaves();
+
+    let output = writebook(
+        &["book", "contents", "4", "--instance", &server.url, "--json"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let envelope = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["title"], "Handbook");
+    assert_eq!(
+        envelope["data"]["leaves"][0],
+        serde_json::json!({ "id": 11, "type": "section", "title": "On call", "url": format!("{}/4/handbook/11/on-call", server.url) })
+    );
+    assert_eq!(
+        envelope["breadcrumbs"].as_array().unwrap().iter().map(|it| it["command"].as_str().unwrap()).collect::<Vec<_>>(),
+        [
+            "writebook read <url>".to_string(),
+            format!("writebook search \"<query>\" --book {}/4/handbook", server.url),
+            format!("writebook clone {}/4/handbook", server.url),
+        ]
+    );
+
+    let filtered = writebook(
+        &["book", "contents", "4", "--instance", &server.url, "--jq", ".data.leaves[] | select(.type != \"page\") | .title"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+    assert!(filtered.status.success(), "{}", stderr(&filtered));
+    assert_eq!(stdout(&filtered), "On call\nRotation chart\n");
+
+    let objects = writebook(
+        &["book", "contents", "4", "--instance", &server.url, "--jq", ".data.leaves[0] | {id, type}"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+    assert_eq!(stdout(&objects), "{\n  \"id\": 11,\n  \"type\": \"section\"\n}\n");
+}
+
+#[test]
+fn refuses_an_invalid_jq_expression_before_asking_the_server() {
+    let server = book_with_three_kinds_of_leaves();
+
+    let output = writebook(&["book", "contents", "4", "--instance", &server.url, "--jq", ".data["], &[]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("is not a valid jq expression"), "{}", stderr(&output));
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn listing_a_books_contents_needs_a_sign_in() {
+    let server = book_with_three_kinds_of_leaves();
+
+    let output = writebook(&["book", "contents", &format!("{}/4/handbook", server.url)], &[]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains(&format!("Sign in with `writebook instance add {}`", server.url)), "{}", stderr(&output));
+    assert!(server.requests().is_empty());
 }

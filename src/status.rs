@@ -46,6 +46,10 @@ fn print_local_changes(comparison: &Comparison) {
         lines.push("modified:   book metadata (index.md front matter)".to_string());
     }
 
+    if comparison.cover_changed_locally {
+        lines.push("modified:   cover".to_string());
+    }
+
     for leaf in &comparison.leaves {
         if leaf.deleted_locally() {
             lines.push(format!("deleted:    {}", label(&leaf.state.filename, &leaf.state.title)));

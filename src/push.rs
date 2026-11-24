@@ -98,7 +98,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
             state.leaves.push(leaf);
             Ok(id)
         }
-        Entry::Section { title, filename } => {
+        Entry::Section { title, filename, theme } => {
             let body = match filename {
                 Some(filename) => checkout.read_working(filename)?,
                 None => String::new(),
@@ -106,7 +106,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
 
             let response = client.post(
                 &format!("/books/{book_id}/sections.json"),
-                &json!({ "leaf": { "title": title }, "section": { "body": body } }),
+                &json!({ "leaf": { "title": title }, "section": section_params(&body, theme) }),
             )?;
 
             if let Some(filename) = filename {
@@ -172,7 +172,7 @@ fn update_leaf(
             push_page_body(client, checkout, state, book_id, &mut leaf, entry)?;
             update_state_leaf(state, leaf);
         }
-        Entry::Section { title, filename } => {
+        Entry::Section { title, filename, theme } => {
             let body = match filename {
                 Some(filename) => checkout.read_working(filename)?,
                 None => String::new(),
@@ -183,7 +183,7 @@ fn update_leaf(
                 &sync::leaf_path(book_id, "Section", known.id),
                 &json!({
                     "leaf": { "title": title },
-                    "section": { "body": body },
+                    "section": section_params(&body, theme),
                     "base_fingerprint": known.fingerprint,
                 }),
             )?;
@@ -196,6 +196,7 @@ fn update_leaf(
             leaf.title = title.clone();
             leaf.filename = filename.clone();
             leaf.fingerprint = fingerprint(&response);
+            leaf.theme = response["theme"].as_str().map(str::to_string).or(leaf.theme);
             update_state_leaf(state, leaf);
         }
         Entry::Picture { caption, filename } => {
@@ -238,6 +239,15 @@ fn update_leaf(
     }
 
     Ok(())
+}
+
+/// A section's body, and its theme when index.md names one. Without one the
+/// server keeps the section's current theme.
+fn section_params(body: &str, theme: &Option<String>) -> serde_json::Value {
+    match theme {
+        Some(theme) => json!({ "body": body, "theme": theme }),
+        None => json!({ "body": body }),
+    }
 }
 
 /// Upload the page's body: any new or changed local image in assets/ goes up
@@ -284,8 +294,14 @@ fn push_page_body(
             .to_string();
 
         if slug != name {
-            std::fs::rename(&path, checkout.working_path(&format!("assets/{slug}")))
-                .with_context(|| format!("could not rename assets/{name}"))?;
+            let target = checkout.working_path(&format!("assets/{slug}"));
+
+            if index_uses(checkout, &format!("assets/{name}"))? {
+                std::fs::copy(&path, &target).with_context(|| format!("could not copy assets/{name}"))?;
+            } else {
+                std::fs::rename(&path, &target).with_context(|| format!("could not rename assets/{name}"))?;
+            }
+
             body = body.replace(&format!("](assets/{name})"), &format!("](assets/{slug})"));
             renamed = true;
             state.uploads.remove(&name);
@@ -311,6 +327,13 @@ fn push_page_body(
     checkout.write_base(&filename, &body)?;
     leaf.fingerprint = fingerprint(&response);
     Ok(())
+}
+
+/// index.md uses this file as the cover or a picture, so renaming it for a
+/// page would break that line.
+fn index_uses(checkout: &Checkout, filename: &str) -> Result<bool> {
+    let document = index::parse(&checkout.read_working("index.md")?)?;
+    Ok(document.meta.cover.as_deref() == Some(filename) || document.entries.iter().any(|it| it.filename() == Some(filename)))
 }
 
 fn reorder(
@@ -381,34 +404,75 @@ fn push_book(
         println!("  updated: book metadata");
     }
 
-    push_cover(client, checkout, state, book_id)
+    push_cover(client, checkout, state, book_id, document.meta.cover.as_deref())
 }
 
-fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, book_id: u64) -> Result<()> {
-    let Some(cover) = state.cover.clone() else {
-        return Ok(());
-    };
-
-    match std::fs::read(checkout.working_path(&cover.filename)) {
-        Ok(bytes) => {
-            let sha256 = checkout::sha256(&bytes);
-
-            if sha256 != cover.sha256 {
-                let basename = cover.filename.strip_prefix("assets/").unwrap_or(&cover.filename);
-
-                client.patch_multipart(
-                    &format!("/books/{book_id}.json"),
-                    &[Part { name: "book[cover]", filename: Some(basename), data: PartData::Bytes(&bytes) }],
-                )?;
-
-                state.cover = Some(checkout::CoverState { filename: cover.filename, remote_checksum: String::new(), sha256 });
-                println!("  updated: cover");
+/// Bring the remote cover in line with index.md's `cover:` line: upload the
+/// named file when it's new or changed, or remove the cover when the line is
+/// empty. Without a `cover:` line, the tracked cover file decides, and a
+/// deleted file removes the cover.
+fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, book_id: u64, cover: Option<&str>) -> Result<()> {
+    match cover {
+        Some("") => {
+            if state.cover.is_some() {
+                remove_cover(client, state, book_id)?;
             }
         }
-        Err(_) => {
-            client.patch(&format!("/books/{book_id}.json"), &json!({ "remove_cover": "true" }))?;
-            state.cover = None;
-            println!("  removed: cover");
+        Some(filename) => {
+            let bytes = std::fs::read(checkout.working_path(filename)).with_context(|| format!("could not read the cover, {filename}"))?;
+            upload_cover(client, state, book_id, filename, &bytes)?;
+        }
+        None => {
+            if let Some(tracked) = state.cover.clone() {
+                match std::fs::read(checkout.working_path(&tracked.filename)) {
+                    Ok(bytes) => upload_cover(client, state, book_id, &tracked.filename, &bytes)?,
+                    Err(_) => remove_cover(client, state, book_id)?,
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn upload_cover(client: &mut api::Client, state: &mut State, book_id: u64, filename: &str, bytes: &[u8]) -> Result<()> {
+    let sha256 = checkout::sha256(bytes);
+
+    if state.cover.as_ref().is_some_and(|it| it.filename == filename && it.sha256 == sha256) {
+        return Ok(());
+    }
+
+    let basename = filename.strip_prefix("assets/").unwrap_or(filename);
+    let response = client.patch_multipart(
+        &format!("/books/{book_id}.json"),
+        &[Part { name: "book[cover]", filename: Some(basename), data: PartData::Bytes(bytes) }],
+    )?;
+
+    state.cover = Some(checkout::CoverState { filename: filename.to_string(), remote_checksum: String::new(), sha256 });
+    record_remote_cover(client, state, book_id, &fingerprint(&response))?;
+    println!("  updated: cover");
+    Ok(())
+}
+
+fn remove_cover(client: &mut api::Client, state: &mut State, book_id: u64) -> Result<()> {
+    let response = client.patch(&format!("/books/{book_id}.json"), &json!({ "remove_cover": "true" }))?;
+    state.cover = None;
+    record_remote_cover(client, state, book_id, &fingerprint(&response))?;
+    println!("  removed: cover");
+    Ok(())
+}
+
+/// Changing the cover changes the book's fingerprint, and the server names
+/// the cover's checksum only in the manifest. Take the checksum from the
+/// manifest only when the book is still as this push left it. If someone
+/// changed it in between, the next pull brings that change in.
+fn record_remote_cover(client: &mut api::Client, state: &mut State, book_id: u64, book_fingerprint: &str) -> Result<()> {
+    state.book_fingerprint = book_fingerprint.to_string();
+    let manifest = sync::fetch_manifest(client, book_id)?;
+
+    if manifest.book.fingerprint == book_fingerprint {
+        if let (Some(cover), Some(remote)) = (state.cover.as_mut(), manifest.book.cover) {
+            cover.remote_checksum = remote.checksum;
         }
     }
 

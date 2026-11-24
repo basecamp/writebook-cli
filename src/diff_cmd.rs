@@ -97,7 +97,7 @@ fn diff_remote() -> Result<()> {
                             print_diff(filename, "", &body);
                         }
 
-                        remote_entries.push(Entry::Section { title: content.title, filename });
+                        remote_entries.push(Entry::Section { title: content.title, filename, theme: content.theme });
                     }
                     "Picture" => {
                         if let Some(image) = &content.image {
@@ -144,7 +144,7 @@ fn diff_remote() -> Result<()> {
         }
     }
 
-    print_diff("index.md", &checkout.read_base("index.md")?, &index::serialize(&sync::book_meta(&manifest), &remote_entries));
+    print_diff("index.md", &checkout.read_base("index.md")?, &index::serialize(&sync::book_meta(&manifest, &state), &remote_entries));
 
     for compared in &comparison.leaves {
         if compared.deleted_remotely {
@@ -167,6 +167,7 @@ fn remote_entry(kind: &str, content: &sync::RemoteLeafContent, filename: Option<
         "Section" => Some(Entry::Section {
             title: content.title.clone(),
             filename: if content.body.as_deref().unwrap_or_default().is_empty() { None } else { filename },
+            theme: content.theme.clone(),
         }),
         "Picture" => filename.map(|filename| Entry::Picture { caption: content.caption.clone().unwrap_or_default(), filename }),
         _ => None,

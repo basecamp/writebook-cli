@@ -1,5 +1,5 @@
-//! Signing in without a terminal or a browser: `writebook login` prints the
-//! link, and `writebook login --code` finishes with the approval code.
+//! Signing in without a terminal or a browser: `writebook instance add` prints
+//! the link, and running it again with --code finishes with the approval code.
 
 mod support;
 
@@ -23,17 +23,21 @@ fn signs_in_in_two_steps_with_the_approval_code() {
     let config = support::tempdir();
     let env = [("XDG_CONFIG_HOME", config.to_str().unwrap())];
 
-    let started = writebook(&["login", &server.url], &env);
+    let add = ["instance", "add", server.url.as_str(), "--alias", "work"];
+
+    let started = writebook(&add, &env);
     assert!(started.status.success(), "{}", stderr(&started));
     assert!(stdout(&started).contains("http://x/oauth/device_verification?user_code=ABCD-EFGH"), "{}", stdout(&started));
     assert!(stdout(&started).contains("--code"), "{}", stdout(&started));
+    assert!(stdout(&writebook(&["instance", "list"], &env)).contains("No instances"), "added only once signed in");
 
-    let wrong = writebook(&["login", &server.url, "--code", "AAAA-AAAA"], &env);
+    let wrong = writebook(&[&add[..], &["--code", "AAAA-AAAA"]].concat(), &env);
     assert!(!wrong.status.success());
     assert!(stderr(&wrong).contains("doesn't match"), "{}", stderr(&wrong));
 
-    let finished = writebook(&["login", &server.url, "--code", "WXYZ-2345"], &env);
+    let finished = writebook(&[&add[..], &["--code", "WXYZ-2345"]].concat(), &env);
     assert!(finished.status.success(), "{}", stderr(&finished));
+    assert!(stdout(&writebook(&["instance", "list"], &env)).contains("Signed in as default"));
 
     let token_request = server.requests().into_iter().rev().find(|it| it.path == "/oauth/tokens").unwrap();
     assert!(token_request.body.contains("device_code=wb_dc_secret"), "{}", token_request.body);
@@ -41,18 +45,18 @@ fn signs_in_in_two_steps_with_the_approval_code() {
     let credentials = std::fs::read_to_string(config.join("writebook/credentials.json")).unwrap();
     assert!(credentials.contains("wb_at_new"), "{credentials}");
 
-    let again = writebook(&["login", &server.url, "--code", "WXYZ-2345"], &env);
+    let again = writebook(&[&add[..], &["--code", "WXYZ-2345"]].concat(), &env);
     assert!(!again.status.success(), "the pending sign-in is used up");
-    assert!(stderr(&again).contains("writebook login"), "{}", stderr(&again));
+    assert!(stderr(&again).contains("Start one with `writebook instance add work`"), "{}", stderr(&again));
 }
 
 #[test]
 fn a_code_without_a_started_sign_in_explains_what_to_run() {
     let server = fake_writebook();
 
-    let output = writebook(&["login", &server.url, "--code", "WXYZ-2345"], &[]);
+    let output = writebook(&["instance", "add", &server.url, "--code", "WXYZ-2345"], &[]);
 
     assert!(!output.status.success());
-    assert!(stderr(&output).contains(&format!("writebook login {}", server.url)), "{}", stderr(&output));
+    assert!(stderr(&output).contains(&format!("writebook instance add {}", server.url)), "{}", stderr(&output));
     assert!(server.requests().is_empty());
 }

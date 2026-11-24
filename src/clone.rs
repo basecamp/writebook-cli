@@ -41,11 +41,11 @@ pub fn run(url: &str, directory: Option<&Path>) -> Result<()> {
         }
     }
 
-    let index_md = index::serialize(&sync::book_meta(&manifest), &entries);
+    sync::mirror_cover(&mut client, &checkout, &mut state, &manifest)?;
+
+    let index_md = index::serialize(&sync::book_meta(&manifest, &state), &entries);
     checkout.write_working("index.md", &index_md)?;
     checkout.write_base("index.md", &index_md)?;
-
-    sync::mirror_cover(&mut client, &checkout, &mut state, &manifest)?;
     checkout.save_state(&state)?;
 
     println!("Done: {} leaves.", manifest.leaves.len());
