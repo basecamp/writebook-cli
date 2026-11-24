@@ -33,7 +33,7 @@ fn reads_json() {
     let server = Server::start(|_| reply(200, PAGE_MD));
 
     let output = writebook(&["read", "--json", &format!("{}/4/handbook/12/on-call", server.url)], &[]);
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
 
     assert_eq!(json["title"], "On & off call");
     assert_eq!(json["url"], "http://books.test/4/handbook/12/on-call");
@@ -67,7 +67,7 @@ fn reads_through_the_api_with_a_token() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json["markdown"], "# Private steps\n");
     assert_eq!(json["url"], format!("{}/4/handbook/12/on-call", server.url));
     assert_eq!(json["source"], "api");
@@ -220,7 +220,7 @@ fn searches_a_book_like_a_browser_when_there_is_no_token() {
     let output = writebook(&["search", "--json", &format!("{}/4/handbook", server.url), "roll back"], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json[0]["title"], "Deploys");
     assert_eq!(json[0]["url"], format!("{}/4/handbook/12/deploys", server.url));
     assert_eq!(json[0]["snippet"], "how to roll back");
@@ -385,7 +385,7 @@ fn searches_a_book_through_json_with_a_read_only_token() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json[0]["title"], "Deploys");
     assert_eq!(json[0]["book"], "");
     assert_eq!(json[0]["url"], "http://books.test/4/handbook/12/deploys");
@@ -455,13 +455,45 @@ fn lists_a_books_contents_by_id_on_an_instance() {
     );
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
-    assert_eq!(json["title"], "Handbook");
+    let envelope = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["title"], "Handbook");
     assert_eq!(
-        json["leaves"][0],
+        envelope["data"]["leaves"][0],
         serde_json::json!({ "id": 11, "type": "section", "title": "On call", "url": format!("{}/4/handbook/11/on-call", server.url) })
     );
-    assert_eq!(json["leaves"].as_array().unwrap().iter().map(|it| it["type"].as_str().unwrap()).collect::<Vec<_>>(), ["section", "page", "picture"]);
+    assert_eq!(
+        envelope["breadcrumbs"].as_array().unwrap().iter().map(|it| it["command"].as_str().unwrap()).collect::<Vec<_>>(),
+        [
+            "writebook read <url>".to_string(),
+            format!("writebook search {}/4/handbook \"<query>\"", server.url),
+            format!("writebook clone {}/4/handbook", server.url),
+        ]
+    );
+
+    let filtered = writebook(
+        &["book", "contents", "4", "--instance", &server.url, "--jq", ".data.leaves[] | select(.type != \"page\") | .title"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+    assert!(filtered.status.success(), "{}", stderr(&filtered));
+    assert_eq!(stdout(&filtered), "On call\nRotation chart\n");
+
+    let objects = writebook(
+        &["book", "contents", "4", "--instance", &server.url, "--jq", ".data.leaves[0] | {id, type}"],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+    assert_eq!(stdout(&objects), "{\n  \"id\": 11,\n  \"type\": \"section\"\n}\n");
+}
+
+#[test]
+fn refuses_an_invalid_jq_expression_before_asking_the_server() {
+    let server = book_with_three_kinds_of_leaves();
+
+    let output = writebook(&["book", "contents", "4", "--instance", &server.url, "--jq", ".data["], &[]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("is not a valid jq expression"), "{}", stderr(&output));
+    assert!(server.requests().is_empty());
 }
 
 #[test]

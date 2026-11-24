@@ -50,11 +50,16 @@ To look something up, don't clone. These print to stdout:
 
 ```sh
 writebook read <book-or-page-url>        # Markdown with title/url front matter
-writebook read <url> --json              # {title, url, markdown, source}
+writebook read <url> --json              # data: {title, url, markdown, source}
 writebook book list --instance <alias-or-site-url> [--json|--markdown]   # the site's books
 writebook book contents <book-url> [--json|--markdown]   # a book's pages, sections and pictures, in order (needs a sign-in)
 writebook search <book-or-site-url> "query" [--json|--markdown]   # matching pages, with links and snippets
 ```
+
+`--json` prints `{ok, data, breadcrumbs}`: the result is in `data`, and
+`breadcrumbs` suggests commands to run next. `--jq <expr>` filters that JSON
+with a built-in jq, no `jq` needed, and prints strings raw:
+`writebook book contents <book-url> --jq '.data.leaves[].url'`.
 
 `read` accepts reading links, editing links and `.md` links. Published books
 need no sign-in. For private books, set `WRITEBOOK_TOKEN` and

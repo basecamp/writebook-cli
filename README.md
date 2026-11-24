@@ -33,13 +33,16 @@ writebook push
 
 Only need to look something up? `book list`, `book contents`, `read` and
 `search` print straight to stdout, no checkout needed. The lists print a table,
-or Markdown with `--markdown`, or JSON with `--json`:
+or Markdown with `--markdown`, or JSON with `--json`. JSON comes as
+`{ok, data, breadcrumbs}`, with suggested next commands in `breadcrumbs`, and
+`--jq` filters it with a built-in jq (strings print raw, like `jq -r`):
 
 ```sh
 writebook instance add https://books.example.com --alias books
 writebook book list --instance books
 writebook read https://books.example.com/4/field-notes/12/getting-started
 writebook search https://books.example.com/4/field-notes "roll back"
+writebook book contents 4 --jq '.data.leaves[] | select(.type == "page") | .url'
 ```
 
 First run? `writebook setup` installs the agent skill, wires up shell

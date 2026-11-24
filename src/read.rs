@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::checkout;
 use crate::creds;
 use crate::inventory;
-use crate::output::{self, Format};
+use crate::output::{self, Breadcrumb, Format};
 use crate::plan::Manifest;
 use crate::sync;
 use crate::web::{self, Target, Web};
@@ -94,7 +94,7 @@ struct ApiHitBook {
     title: String,
 }
 
-pub fn read(url: &str, json: bool) -> Result<()> {
+pub fn read(url: &str, format: Format) -> Result<()> {
     let target = web::parse_target(url)?;
 
     if target.book_id.is_none() {
@@ -108,10 +108,23 @@ pub fn read(url: &str, json: bool) -> Result<()> {
         None => from_export(&web, &target)?,
     };
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&document)?);
-    } else {
-        print!("{}", as_markdown(&document));
+    match format {
+        Format::Json { jq } => {
+            let breadcrumbs = [
+                Breadcrumb {
+                    action: "contents",
+                    command: format!("writebook book contents {}", document.url),
+                    description: "List the book's pages, sections and pictures",
+                },
+                Breadcrumb {
+                    action: "search",
+                    command: format!("writebook search {} \"<query>\"", document.url),
+                    description: "Search the book",
+                },
+            ];
+            output::print_json(&document, &breadcrumbs, jq.as_deref())?;
+        }
+        _ => print!("{}", as_markdown(&document)),
     }
 
     Ok(())
@@ -122,7 +135,18 @@ pub fn books(host: &str, format: Format) -> Result<()> {
     let books = list_books(&web)?;
 
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&books)?),
+        Format::Json { jq } => {
+            let breadcrumbs = [
+                Breadcrumb {
+                    action: "contents",
+                    command: format!("writebook book contents <id> --instance {}", inventory::name_for(host)),
+                    description: "List a book's pages, sections and pictures",
+                },
+                Breadcrumb { action: "read", command: "writebook read <url>".to_string(), description: "Print a book as Markdown" },
+                Breadcrumb { action: "clone", command: "writebook clone <url>".to_string(), description: "Clone a book to edit it locally" },
+            ];
+            output::print_json(&books, &breadcrumbs, jq.as_deref())?;
+        }
         _ if books.is_empty() => println!("No books."),
         Format::Table => print_books_table(&books),
         Format::Markdown => print_books_markdown(&books),
@@ -180,7 +204,22 @@ pub fn contents(book: &str, instance: Option<&str>, format: Format) -> Result<()
     let contents = Contents { title: manifest.book.title.clone(), url: book_url, leaves };
 
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&contents)?),
+        Format::Json { jq } => {
+            let breadcrumbs = [
+                Breadcrumb { action: "read", command: "writebook read <url>".to_string(), description: "Print a page as Markdown" },
+                Breadcrumb {
+                    action: "search",
+                    command: format!("writebook search {} \"<query>\"", contents.url),
+                    description: "Search the book",
+                },
+                Breadcrumb {
+                    action: "clone",
+                    command: format!("writebook clone {}", contents.url),
+                    description: "Clone the book to edit it locally",
+                },
+            ];
+            output::print_json(&contents, &breadcrumbs, jq.as_deref())?;
+        }
         _ if contents.leaves.is_empty() => println!("{} has no pages yet.", contents.title),
         Format::Table => print_contents_table(&contents),
         Format::Markdown => print_contents_markdown(&contents),
@@ -247,7 +286,10 @@ pub fn search(url: &str, query: &str, format: Format) -> Result<()> {
     };
 
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&hits)?),
+        Format::Json { jq } => {
+            let breadcrumbs = [Breadcrumb { action: "read", command: "writebook read <url>".to_string(), description: "Print a page as Markdown" }];
+            output::print_json(&hits, &breadcrumbs, jq.as_deref())?;
+        }
         _ if hits.is_empty() => {
             println!("No matches.");
 

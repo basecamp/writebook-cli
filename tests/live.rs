@@ -42,7 +42,7 @@ fn reads_a_whole_published_book() {
     let output = writebook(&["read", "--json", &format!("{url}/1/ops-on-call-handbook")], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json["title"], "Ops & On-call Handbook");
     assert!(json["markdown"].as_str().unwrap().contains("check the workers first"));
 }
@@ -54,7 +54,7 @@ fn lists_published_books_only() {
     let output = writebook(&["book", "list", "--json", "--instance", &url], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     let titles: Vec<&str> = json.as_array().unwrap().iter().map(|it| it["title"].as_str().unwrap()).collect();
     assert_eq!(titles, vec!["Ops & On-call Handbook"]);
 }
@@ -66,7 +66,7 @@ fn searches_every_published_book() {
     let output = writebook(&["search", "--json", &url, "resque queue"], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
     assert_eq!(json[0]["title"], "Queue backlog & workers");
     assert_eq!(json[0]["url"], format!("{url}/1/ops-on-call-handbook/3/queue-backlog-workers"));
 }

@@ -95,6 +95,9 @@ enum Command {
         /// Print JSON instead of Markdown
         #[usage(long)]
         json: bool,
+        /// Filter the JSON with a jq expression, like '.data.markdown'
+        #[usage(long)]
+        jq: Option<String>,
     },
     /// Search a book, or every book on a site
     Search {
@@ -108,6 +111,9 @@ enum Command {
         /// Print Markdown
         #[usage(long)]
         markdown: bool,
+        /// Filter the JSON with a jq expression, like '.data[].url'
+        #[usage(long, conflicts = "markdown")]
+        jq: Option<String>,
     },
     /// Set up writebook: agent skill, shell completions, and a quick tour
     #[usage(help_heading = "Setup commands")]
@@ -157,6 +163,9 @@ enum InstanceCommand {
         /// Print Markdown
         #[usage(long)]
         markdown: bool,
+        /// Filter the JSON with a jq expression, like '.data[].url'
+        #[usage(long, conflicts = "markdown")]
+        jq: Option<String>,
     },
     /// Sign out of an instance, all its profiles, and remove it
     Remove {
@@ -223,6 +232,9 @@ enum BookCommand {
         /// Print Markdown
         #[usage(long)]
         markdown: bool,
+        /// Filter the JSON with a jq expression, like '.data[].url'
+        #[usage(long, conflicts = "markdown")]
+        jq: Option<String>,
     },
     /// List the books on an instance
     List {
@@ -235,6 +247,9 @@ enum BookCommand {
         /// Print Markdown
         #[usage(long)]
         markdown: bool,
+        /// Filter the JSON with a jq expression, like '.data[].url'
+        #[usage(long, conflicts = "markdown")]
+        jq: Option<String>,
     },
 }
 
@@ -303,7 +318,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Diff { remote } => diff_cmd::run(remote),
         Command::Instance { command } => match command {
             InstanceCommand::Add { url, alias, code } => instance::add(&url, alias.as_deref(), cli.profile.as_deref(), code.as_deref()),
-            InstanceCommand::List { json, markdown } => instance::list(Format::from_flags(json, markdown)),
+            InstanceCommand::List { json, markdown, jq } => instance::list(Format::from_flags(json, markdown, jq)?),
             InstanceCommand::Remove { instance } => instance::remove(&instance),
             InstanceCommand::SetDefault { instance } => instance::set_default(&instance),
         },
@@ -314,11 +329,15 @@ fn run(cli: Cli) -> Result<()> {
             ProfileCommand::SetDefault { name, instance } => profile::set_default(&name, instance.as_deref()),
         },
         Command::Book { command } => match command {
-            BookCommand::List { instance, json, markdown } => read::books(&inventory::host(instance.as_deref())?, Format::from_flags(json, markdown)),
-            BookCommand::Contents { book, instance, json, markdown } => read::contents(&book, instance.as_deref(), Format::from_flags(json, markdown)),
+            BookCommand::List { instance, json, markdown, jq } => {
+                read::books(&inventory::host(instance.as_deref())?, Format::from_flags(json, markdown, jq)?)
+            }
+            BookCommand::Contents { book, instance, json, markdown, jq } => {
+                read::contents(&book, instance.as_deref(), Format::from_flags(json, markdown, jq)?)
+            }
         },
-        Command::Read { url, json } => read::read(&url, json),
-        Command::Search { url, query, json, markdown } => read::search(&url, &query, Format::from_flags(json, markdown)),
+        Command::Read { url, json, jq } => read::read(&url, Format::from_flags(json, false, jq)?),
+        Command::Search { url, query, json, markdown, jq } => read::search(&url, &query, Format::from_flags(json, markdown, jq)?),
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),

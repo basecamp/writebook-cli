@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::creds;
-use crate::output::{self, Format};
+use crate::output::{self, Breadcrumb, Format};
 use crate::inventory::{DEFAULT_PROFILE, Instance, Inventory, host_of};
 
 /// Sign in to an instance and keep it in the inventory. Adding one that's
@@ -99,7 +99,18 @@ pub fn list(format: Format) -> Result<()> {
     }
 
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&rows)?),
+        Format::Json { jq } => {
+            let breadcrumbs = [
+                Breadcrumb { action: "books", command: "writebook book list --instance <alias>".to_string(), description: "List an instance's books" },
+                Breadcrumb { action: "add", command: "writebook instance add <url>".to_string(), description: "Sign in to another instance" },
+                Breadcrumb {
+                    action: "set_default",
+                    command: "writebook instance set-default <alias>".to_string(),
+                    description: "Use an instance when --instance isn't given",
+                },
+            ];
+            output::print_json(&rows, &breadcrumbs, jq.as_deref())?;
+        }
         _ if rows.is_empty() => println!("No instances. Add one with `writebook instance add <url>`."),
         Format::Table => print_table(&rows),
         Format::Markdown => print_markdown(&rows),

@@ -120,6 +120,17 @@ pub fn profile_for(host: &str) -> Result<String> {
     }
 }
 
+/// What to call a site in a suggested command: its alias when it's in the
+/// inventory, otherwise its URL.
+pub fn name_for(host: &str) -> String {
+    let inventory = Inventory::load().unwrap_or_default();
+
+    match inventory.for_host(host) {
+        Some((alias, _)) => alias.clone(),
+        None => host.to_string(),
+    }
+}
+
 /// The command that signs in to this site as this profile.
 pub fn sign_in_command(host: &str, profile: &str) -> String {
     let inventory = Inventory::load().unwrap_or_default();
