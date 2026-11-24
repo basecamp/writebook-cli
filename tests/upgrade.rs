@@ -1,5 +1,7 @@
 //! `writebook upgrade`, with a fake mise on the PATH.
 
+#![cfg(unix)]
+
 mod support;
 
 use std::fs;

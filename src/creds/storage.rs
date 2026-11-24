@@ -58,7 +58,7 @@ pub fn save(host: &str, profile: &str, credentials: &Credentials) -> Result<()> 
         Backend::File => {
             let mut file = load_file()?;
             file.sign_ins.insert(key, credentials.clone());
-            fsutil::write_json_privately(&file_path(), &file)
+            fsutil::write_secret_json(&file_path(), &file)
         }
     }
 }
@@ -95,7 +95,7 @@ fn remove_from_file(key: &str) -> Result<Option<Credentials>> {
     let removed = file.sign_ins.remove(key);
 
     if removed.is_some() {
-        fsutil::write_json_privately(&file_path(), &file)?;
+        fsutil::write_secret_json(&file_path(), &file)?;
     }
 
     Ok(removed)

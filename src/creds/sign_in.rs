@@ -126,7 +126,7 @@ fn start_pending(host: &str, profile: &str) -> Result<()> {
 
     let mut file = load_pending()?;
     file.sign_ins.insert(pending_key(host, profile), pending.clone());
-    fsutil::write_json_privately(&pending_path(), &file)?;
+    fsutil::write_secret_json(&pending_path(), &file)?;
 
     let minutes = pending.expires_at.saturating_sub(now()).div_ceil(60);
 
@@ -153,7 +153,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
 
     if pending.expires_at <= now() {
         file.sign_ins.remove(&key);
-        fsutil::write_json_privately(&pending_path(), &file)?;
+        fsutil::write_secret_json(&pending_path(), &file)?;
         bail!("the sign-in link for {host} has expired. Start again with `{login}`");
     }
 
@@ -161,7 +161,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
         Attempt::SignedIn(credentials) => {
             storage::save(host, profile, &credentials)?;
             file.sign_ins.remove(&key);
-            fsutil::write_json_privately(&pending_path(), &file)?;
+            fsutil::write_secret_json(&pending_path(), &file)?;
             println!("Signed in to {host}.");
             Ok(())
         }
@@ -254,7 +254,7 @@ fn sign_in_error(body: &Value) -> anyhow::Error {
 /// Whether a browser could open here at all. Over SSH or on a server there is
 /// nothing to open, and the printed link is the way in.
 fn has_display() -> bool {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", windows)) {
         return std::env::var_os("SSH_CONNECTION").is_none();
     }
 
@@ -262,9 +262,17 @@ fn has_display() -> bool {
 }
 
 fn open_in_browser(url: &str) {
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    } else {
+        std::process::Command::new("xdg-open")
+    };
 
-    let _ = std::process::Command::new(opener)
+    let _ = command
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
