@@ -24,16 +24,16 @@ Before it pushes anything, the script:
 - needs you on `main`, with no changes, and in sync with `origin`
 - refuses a tag that already exists at another commit
 - refuses a version older than the latest release
-- runs clippy and the tests
+- runs clippy and the tests (the live tests only when `WRITEBOOK_LIVE_URL` is set)
 
 If the tag push is rejected, it deletes the local tag.
 
 ## What the release workflow does
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on the
-tag. It checks that the tag is on `main` and matches `Cargo.toml`, runs clippy
-and the tests, builds the binaries for Linux and macOS, attests their build
-provenance, and publishes the GitHub release.
+tag. It checks that the tag is on `main` and matches `Cargo.toml`, runs CI,
+builds the binaries for Linux and macOS, attests their build provenance, and
+publishes the GitHub release.
 
 - A release candidate is marked as a prerelease and doesn't become the latest
   release, so `mise` and `writebook upgrade` don't pick it up.

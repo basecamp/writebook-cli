@@ -133,7 +133,7 @@ info "  Commit: ${LOCAL:0:7}"
 info "  Tag:    $TAG"
 echo ""
 cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked --bins --test read --test login --test instances --test upgrade
+cargo test --locked
 
 next_steps() {
   echo ""
