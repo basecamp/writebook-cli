@@ -101,10 +101,14 @@ enum Command {
     },
     /// Search a book, or every book on a site
     Search {
-        /// Book URL, or a site URL to search all its books
-        url: String,
         /// What to look for
         query: String,
+        /// Book id or URL to search in (without it, every book on the instance)
+        #[usage(long)]
+        book: Option<String>,
+        /// Instance alias or URL (defaults to the default instance)
+        #[usage(long)]
+        instance: Option<String>,
         /// Print JSON
         #[usage(long, conflicts = "markdown")]
         json: bool,
@@ -337,7 +341,9 @@ fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Read { url, json, jq } => read::read(&url, Format::from_flags(json, false, jq)?),
-        Command::Search { url, query, json, markdown, jq } => read::search(&url, &query, Format::from_flags(json, markdown, jq)?),
+        Command::Search { query, book, instance, json, markdown, jq } => {
+            read::search(&query, book.as_deref(), instance.as_deref(), Format::from_flags(json, markdown, jq)?)
+        }
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),

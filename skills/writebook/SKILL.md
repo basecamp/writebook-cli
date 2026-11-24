@@ -1,13 +1,18 @@
 ---
 name: writebook
 description: |
-  Read and edit Writebook books with the writebook CLI. Read a book or page
-  as Markdown, list books and search without cloning; or clone a book, edit
-  pages as plain files, reorder by moving lines in index.md, and sync with
-  git-style pull/push. Use for ANY task that reads or changes a Writebook book.
+  Read and edit Writebook books with the writebook CLI. Sign in to Writebook
+  instances, list books and their contents, read pages as Markdown, and
+  search. To edit a book, clone it, change its Markdown files, and push the
+  changes back with git-style commands. Use for ANY task that reads or
+  changes a Writebook book.
 triggers:
   - writebook
   - /writebook
+  - writebook instance
+  - writebook profile
+  - writebook book list
+  - writebook book contents
   - writebook clone
   - writebook pull
   - writebook push
@@ -15,8 +20,6 @@ triggers:
   - writebook diff
   - writebook read
   - writebook search
-  - read a handbook page
-  - runbook in writebook
   - edit a writebook book
   - add a page to a book
   - reorder book pages
@@ -24,71 +27,172 @@ triggers:
 
 # Writebook CLI
 
-Writebook books sync to disk like git repositories. Work with normal file
-tools; sync with git-style commands.
+Writebook is a self-hosted web app by 37signals for writing and publishing books.
+Each company or person can run one or multiple own copies of it, called an
+instance. The writebook CLI can work with several instances.
 
-## Commands
+You can use the CLI in two ways:
 
-```sh
-writebook clone <book-url> [dir]   # e.g. https://books.example.com/4/field-notes
-writebook status                   # local + remote changes since last sync
-writebook diff [--remote]          # unified diff of your (or the remote's) changes
-writebook pull                     # fetch + three-way merge remote changes
-writebook push                     # upload local changes (refuses when behind)
-writebook remote add|list|remove   # manage remotes
-```
+- Read books directly from an instance with the online commands. Nothing is
+  saved to disk.
+- Clone a book to a folder of Markdown files, edit the files, and push the
+  changes back to the instance with the local commands. This works like git.
 
-`clone` signs in through a browser device flow: it prints a link, the user
-approves it in a signed-in browser on any device, and either types the
-approval code Writebook then shows, or waits for the CLI to notice.
-Tokens are stored per instance and profile and refresh themselves. A token
-from `WRITEBOOK_TOKEN` replaces the browser sign-in.
+## Authentication
 
-## Just reading
+### Instances
 
-To look something up, don't clone. These print to stdout:
+The CLI keeps a list of instances. Each instance has a URL and a short name
+called an alias. One instance is the default. The CLI uses the default
+instance when you don't pass `--instance`.
 
 ```sh
-writebook read <book-or-page-url>        # Markdown with title/url front matter
-writebook read <url> --json              # data: {title, url, markdown, source}
-writebook book list --instance <alias-or-site-url> [--json|--markdown]   # the site's books
-writebook book contents <book-url> [--json|--markdown]   # a book's pages, sections and pictures, in order (needs a sign-in)
-writebook search <book-or-site-url> "query" [--json|--markdown]   # matching pages, with links and snippets
+writebook instance list --json          # all instances, which one is the default, and who is signed in
+writebook instance add <url>            # sign in to an instance and add it to the list
+writebook instance set-default <alias>
+writebook instance remove <alias>       # sign out and remove the instance from the list
 ```
 
-`--json` prints `{ok, data, breadcrumbs}`: the result is in `data`, and
-`breadcrumbs` suggests commands to run next. `--jq <expr>` filters that JSON
-with a built-in jq, no `jq` needed, and prints strings raw:
-`writebook book contents <book-url> --jq '.data.leaves[].url'`.
+Before you ask the user for a Writebook URL, run `writebook instance list --json`.
+The instance they mean is probably already in the list.
 
-`read` accepts reading links, editing links and `.md` links. Published books
-need no sign-in. For private books, set `WRITEBOOK_TOKEN` and
-`WRITEBOOK_TOKEN_HOST` (the site the token is for; it is never sent elsewhere).
+To sign in, run `writebook instance add <url>`. If the instance is already in
+the list, the command signs in to it again. The first instance you add becomes
+the default. `--alias <name>` sets the alias. Without it, the alias is the
+instance's host name, for example `books.example.com`.
 
-## Running unattended
+`--instance` accepts an alias or a URL. A URL also works for an instance that
+isn't in the list.
 
-Set `WRITEBOOK_TOKEN` and `WRITEBOOK_TOKEN_HOST`. Without a token or a stored
-sign-in, commands that need one fail right away when nobody is at a terminal
-or an agent runs them; they never wait for a browser approval.
+### Profiles
 
-To sign in with no terminal, use two steps: run `writebook instance add <site-url>`,
-give the user the link it prints to approve, ask them for the approval code
-Writebook shows them, then run `writebook instance add <site-url> --code <code>`.
+A profile is a separate sign-in to the same instance, for example a personal
+account and an editor account. Each instance starts with one profile called
+`default`. To give the first profile a different name, pass `--profile <name>`
+to `instance add`.
 
-## A checkout
-
-```
-index.md           the book: metadata + table of contents
-getting-started.md one file per page: just the Markdown body
-assets/            cover, picture images, images embedded in pages
-.writebook/        sync metadata — never edit by hand
+```sh
+writebook profile add <name> [--instance <alias>]   # sign in as another user
+writebook profile list [--instance <alias>]
+writebook profile set-default <name> [--instance <alias>]
+writebook profile remove <name> [--instance <alias>]
 ```
 
-## index.md rules
+Every command uses the instance's default profile. To use a different
+profile, pass `--profile <name>`.
 
-Front matter carries the book's metadata; the lines below are the table of
-contents, one line per leaf. **Line order is book order** — reorder pages by
-moving lines, never with a command.
+### Signing in
+
+Signing in uses the browser. The CLI prints a link. The user opens the link on
+any device, signs in to Writebook, and approves the request. Writebook then
+shows an approval code. The user types the code into the CLI, or waits until
+the CLI sees the approval. The CLI stores the sign-in in the system keyring
+and renews it when it expires.
+
+When you run the CLI as an agent, the user can't type into the CLI, so signing
+in takes these steps:
+
+1. Run `writebook instance add <url>`. It prints a link.
+2. Give the link to the user and ask them to approve it. Ask them for the
+   approval code that Writebook shows after they approve.
+3. Run the same command again, with `--code <code>` added.
+
+If a command needs a sign-in and there is none, the command doesn't wait for
+the user. It fails, and the error message says which command to run.
+
+### Tokens
+
+Instead of signing in, you can set two environment variables:
+
+- `WRITEBOOK_TOKEN`: an API token.
+- `WRITEBOOK_TOKEN_HOST`: the URL of the instance that the token is for. The
+  CLI sends the token only to this instance.
+
+The CLI uses the token as it is. It doesn't save the token or renew it.
+
+## Online commands
+
+These commands read from the instance and print the result:
+
+```sh
+writebook book list [--instance <alias>]       # the books on an instance, with their ids
+writebook book contents <book-id-or-url>       # the pages, sections, and pictures in a book, in order
+writebook read <book-or-page-url>              # a book or a page as Markdown
+writebook search "<query>" [--book <book-id-or-url>]
+```
+
+- `book contents` accepts a book URL, or a book id together with
+  `--instance`. Without `--instance`, it looks for the book id on the default
+  instance.
+- `book contents` needs a sign-in. The other commands can read published books
+  without one.
+- `read` accepts a book URL or a page URL, including edit links and links
+  that end in `.md`. It prints the Markdown with front matter that holds the
+  title and the URL.
+- `search` with `--book` searches that book. `--book` accepts a book URL, or
+  a book id together with `--instance`. Without `--book`, `search` searches
+  every book on the instance. It returns at most 50 results.
+
+### Output formats
+
+`book list`, `book contents`, `search`, and `instance list` print a table by
+default. The table is for people. When you need to use the output, pass
+`--json`. `--markdown` prints a Markdown list.
+
+`--json` prints this structure:
+
+```json
+{
+  "ok": true,
+  "data": "...",
+  "breadcrumbs": [
+    { "action": "...", "command": "...", "description": "..." }
+  ]
+}
+```
+
+`data` holds the result. `breadcrumbs` lists commands that you can run next.
+
+`--jq <expression>` runs a jq filter on the JSON and prints the result. You
+don't need jq installed. If the result is a string, it is printed without
+quotes, the same as `jq -r`.
+
+```sh
+writebook book list --jq '.data[] | "\(.id) \(.title)"'
+writebook book contents <book-url> --jq '.data.leaves[] | select(.type == "page") | .url'
+writebook read <page-url> --jq '.data.markdown'
+```
+
+## Local commands
+
+To edit a book, clone it, edit its files, and push the changes:
+
+```sh
+writebook clone <book-url> [folder]   # download the book into a new folder
+writebook status                      # show what changed locally and on the instance since the last sync
+writebook diff [--remote]             # show your changes, or the instance's changes with --remote
+writebook pull                        # download changes from the instance and merge them into your files
+writebook push                        # upload your changes
+writebook remote add|list|remove      # manage the instances this folder syncs with
+```
+
+Run these commands inside the cloned folder. They sign in as the instance's
+default profile. To use a different profile, pass `--profile <name>`.
+
+### What a cloned book looks like
+
+```
+index.md            the book's settings and its table of contents
+getting-started.md  one file for each page, with only the page's Markdown
+assets/             the cover, pictures, and images used in pages
+.writebook/         files the CLI uses to sync. Don't edit them.
+```
+
+### index.md
+
+The front matter holds the book's settings. Below it is the table of contents,
+with one line for each page, section, and picture. The order of the lines is
+the order of the book.
 
 ```markdown
 ---
@@ -98,35 +202,43 @@ author: Stanko
 theme: green
 ---
 
-# Part One                            ← section
-# [Part Two](part-two.md)             ← section with body text in a file
-[Getting Started](getting-started.md) ← page; link text is the title
-![A sunset](assets/sunset.jpg)        ← picture; alt text is the caption
+# Part One                            ← a section
+# [Part Two](part-two.md)             ← a section with text, stored in part-two.md
+[Getting Started](getting-started.md) ← a page. The link text is the page title.
+![A sunset](assets/sunset.jpg)        ← a picture. The alt text is the caption.
 ```
 
-- Rename the book or change its author/theme by editing the front matter.
-- Retitle a page by editing its link text; the filename stays.
-- Add a page: create the `.md` file, add its line where it belongs, push.
-- Delete a page: remove its line (and file); push trashes it on the server.
-- Page files contain only the body — no title, no front matter.
+- To change the book's title, author, or theme, edit the front matter.
+- To rename a page, edit its link text. Don't rename the file.
+- To move a page, move its line.
+- To add a page, create a `.md` file, add a line for it in `index.md`, and
+  push.
+- To delete a page, remove its line and its file, and push. The instance
+  moves the page to the trash.
+- A page file contains only the page's text. Don't put the title or front
+  matter in it.
 
-## Images
+### Images
 
-Reference images in a page as `![alt](assets/name.png)` with the file placed
-in `assets/`. Push uploads new images and renames the local file to the
-server's slug — expect the reference to be rewritten. Replace a picture by
-overwriting its file in `assets/`.
+To add an image to a page, put the file in `assets/` and write
+`![description](assets/name.png)` in the page. When you push, the CLI uploads
+the image and renames the file to the name the instance gives it. The CLI
+also updates the reference in the page.
 
-## Sync etiquette
+To replace a picture, overwrite its file in `assets/`.
 
-- Run `writebook status` before and after editing.
-- `push` refuses when the remote moved: run `writebook pull`, which three-way
-  merges. Non-overlapping edits merge cleanly; overlapping edits leave
-  standard `<<<<<<<`/`>>>>>>>` conflict markers. Resolve the markers, then
-  push — pull and push both refuse while markers remain.
-- A concurrent web edit during push answers 409; the fix is the same: pull,
-  then push.
+### Syncing
+
+- Run `writebook status` before and after you edit.
+- If someone changed the book on the instance since your last pull, `push`
+  stops. Run `writebook pull`, then push again.
+- `pull` merges the instance's changes into your files. If you and someone
+  else changed the same lines, `pull` adds `<<<<<<<` and `>>>>>>>` conflict
+  markers to the file. Edit the file to resolve the conflict and remove the
+  markers. `pull` and `push` refuse to run while a file has conflict markers.
+- If someone edits the book on the web while you push, the push fails with a
+  409 error. Run `writebook pull`, then push again.
 
 ## Limits
 
-Section themes and brand-new covers are edited on the web, not locally.
+To change a section's theme or upload a new cover, use the Writebook website.

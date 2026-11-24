@@ -41,7 +41,7 @@ or Markdown with `--markdown`, or JSON with `--json`. JSON comes as
 writebook instance add https://books.example.com --alias books
 writebook book list --instance books
 writebook read https://books.example.com/4/field-notes/12/getting-started
-writebook search https://books.example.com/4/field-notes "roll back"
+writebook search "roll back" --book https://books.example.com/4/field-notes
 writebook book contents 4 --jq '.data.leaves[] | select(.type == "page") | .url'
 ```
 
@@ -59,7 +59,7 @@ completions, and prints the basics.
 | `book list [--instance <instance>]` | List the books on an instance |
 | `book contents <book-id-or-url> [--instance <instance>]` | List a book's pages, sections and pictures, in order |
 | `read <url>` | Print a book or one page as Markdown |
-| `search <url> <query>` | Search a book, or every book on a site |
+| `search <query> [--book <book-id-or-url>] [--instance <instance>]` | Search a book, or every book on an instance |
 | `setup` | Install the agent skill + shell completions, print a quick tour |
 | `skill print/install` | Print the embedded SKILL.md, or install it for coding agents |
 | `clone <book-url> [dir]` | Sign in (browser device flow) and download the book |

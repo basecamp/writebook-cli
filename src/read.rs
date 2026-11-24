@@ -118,7 +118,7 @@ pub fn read(url: &str, format: Format) -> Result<()> {
                 },
                 Breadcrumb {
                     action: "search",
-                    command: format!("writebook search {} \"<query>\"", document.url),
+                    command: format!("writebook search \"<query>\" --book {}", document.url),
                     description: "Search the book",
                 },
             ];
@@ -209,7 +209,7 @@ pub fn contents(book: &str, instance: Option<&str>, format: Format) -> Result<()
                 Breadcrumb { action: "read", command: "writebook read <url>".to_string(), description: "Print a page as Markdown" },
                 Breadcrumb {
                     action: "search",
-                    command: format!("writebook search {} \"<query>\"", contents.url),
+                    command: format!("writebook search \"<query>\" --book {}", contents.url),
                     description: "Search the book",
                 },
                 Breadcrumb {
@@ -272,17 +272,24 @@ fn capitalize(word: &str) -> String {
     }
 }
 
-pub fn search(url: &str, query: &str, format: Format) -> Result<()> {
-    let target = web::parse_target(url)?;
-    let web = connect(&target.host)?;
-
+/// Search one book (a book id or URL), or every book on the instance.
+pub fn search(query: &str, book: Option<&str>, instance: Option<&str>, format: Format) -> Result<()> {
     if query.trim().is_empty() {
         bail!("nothing to search for");
     }
 
-    let hits = match search_api(&web, target.book_id, query)? {
+    let (host, book_id) = match book {
+        Some(book) => {
+            let (host, book_id) = book_on_instance(book, instance)?;
+            (host, Some(book_id))
+        }
+        None => (inventory::host(instance)?, None),
+    };
+    let web = connect(&host)?;
+
+    let hits = match search_api(&web, book_id, query)? {
         Some(hits) => hits,
-        None => search_pages(&web, target.book_id, query)?,
+        None => search_pages(&web, book_id, query)?,
     };
 
     match format {

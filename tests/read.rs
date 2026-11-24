@@ -217,7 +217,7 @@ fn searches_a_book_like_a_browser_when_there_is_no_token() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["search", "--json", &format!("{}/4/handbook", server.url), "roll back"], &[]);
+    let output = writebook(&["search", "roll back", "--json", "--book", &format!("{}/4/handbook", server.url)], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
     let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
@@ -326,7 +326,7 @@ fn says_private_books_need_a_token_when_an_anonymous_search_finds_nothing() {
         _ => reply(404, ""),
     });
 
-    let output = writebook(&["search", &server.url, "failover"], &[]);
+    let output = writebook(&["search", "failover", "--instance", &server.url], &[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "No matches.\n");
@@ -351,12 +351,12 @@ fn searches_every_book_in_one_json_request() {
         _ => reply(404, ""),
     });
 
-    let table = writebook(&["search", &server.url, "roll back"], &[]);
+    let table = writebook(&["search", "roll back", "--instance", &server.url], &[]);
     assert!(table.status.success(), "{}", stderr(&table));
     assert_eq!(stdout(&table), "Book      Title    URL\nHandbook  Deploys  http://books.test/4/handbook/12/deploys\n");
     assert_eq!(server.requests().len(), 1);
 
-    let markdown = writebook(&["search", "--markdown", &server.url, "roll back"], &[]);
+    let markdown = writebook(&["search", "roll back", "--markdown", "--instance", &server.url], &[]);
     assert_eq!(stdout(&markdown), "- [Deploys](http://books.test/4/handbook/12/deploys) (Handbook): how to roll back\n");
 }
 
@@ -380,7 +380,7 @@ fn searches_a_book_through_json_with_a_read_only_token() {
     });
 
     let output = writebook(
-        &["search", "--json", &format!("{}/4/handbook", server.url), "roll"],
+        &["search", "roll", "--json", "--book", &format!("{}/4/handbook", server.url)],
         &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
     );
     assert!(output.status.success(), "{}", stderr(&output));
@@ -466,7 +466,7 @@ fn lists_a_books_contents_by_id_on_an_instance() {
         envelope["breadcrumbs"].as_array().unwrap().iter().map(|it| it["command"].as_str().unwrap()).collect::<Vec<_>>(),
         [
             "writebook read <url>".to_string(),
-            format!("writebook search {}/4/handbook \"<query>\"", server.url),
+            format!("writebook search \"<query>\" --book {}/4/handbook", server.url),
             format!("writebook clone {}/4/handbook", server.url),
         ]
     );

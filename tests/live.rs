@@ -63,7 +63,7 @@ fn lists_published_books_only() {
 fn searches_every_published_book() {
     let Some(url) = live_url() else { return };
 
-    let output = writebook(&["search", "--json", &url, "resque queue"], &[]);
+    let output = writebook(&["search", "resque queue", "--json", "--instance", &url], &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
     let json = serde_json::from_str::<serde_json::Value>(&stdout(&output)).unwrap()["data"].clone();
