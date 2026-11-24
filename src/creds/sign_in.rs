@@ -254,7 +254,7 @@ fn sign_in_error(body: &Value) -> anyhow::Error {
 /// Whether a browser could open here at all. Over SSH or on a server there is
 /// nothing to open, and the printed link is the way in.
 fn has_display() -> bool {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", windows)) {
         return std::env::var_os("SSH_CONNECTION").is_none();
     }
 

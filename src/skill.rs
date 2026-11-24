@@ -68,14 +68,17 @@ fn link_into_claude(home: &Path) -> Result<String> {
 fn link_into_claude(home: &Path) -> Result<String> {
     let skill = home.join(".claude/skills/writebook/SKILL.md");
 
-    match fs::read_to_string(&skill) {
-        Ok(existing) if !existing.contains("name: writebook\n") => {
-            Ok("Left ~/.claude/skills/writebook alone — something else already lives there".to_string())
-        }
-        _ => {
-            fs::create_dir_all(skill.parent().unwrap())?;
-            fs::write(&skill, SKILL).with_context(|| format!("could not write {}", skill.display()))?;
-            Ok("Installed the agent skill for Claude Code to ~/.claude/skills/writebook/SKILL.md".to_string())
-        }
+    let ours = match fs::read_to_string(&skill) {
+        Ok(existing) => existing.lines().any(|line| line == "name: writebook"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => return Err(error).with_context(|| format!("could not read {}", skill.display())),
+    };
+
+    if ours {
+        fs::create_dir_all(skill.parent().unwrap())?;
+        fs::write(&skill, SKILL).with_context(|| format!("could not write {}", skill.display()))?;
+        Ok("Installed the agent skill for Claude Code to ~/.claude/skills/writebook/SKILL.md".to_string())
+    } else {
+        Ok("Left ~/.claude/skills/writebook alone — something else already lives there".to_string())
     }
 }

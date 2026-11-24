@@ -25,10 +25,19 @@ fn make_private(path: &Path) -> Result<()> {
     Ok(fs::set_permissions(path, fs::Permissions::from_mode(0o600))?)
 }
 
-/// Files in the user's profile are private to them on Windows already.
+/// Windows gives files in a user's profile an ACL that only that user can
+/// read. Anywhere else, such as a shared XDG_CONFIG_HOME, the file could end
+/// up readable by other accounts, so it isn't written there.
 #[cfg(windows)]
-fn make_private(_path: &Path) -> Result<()> {
-    Ok(())
+fn make_private(path: &Path) -> Result<()> {
+    let home = dirs::home_dir().context("could not determine the home directory")?;
+
+    if path.starts_with(&home) {
+        Ok(())
+    } else {
+        fs::remove_file(path)?;
+        anyhow::bail!("won't write {}: on Windows, writebook keeps sign-ins only inside your user profile ({})", path.display(), home.display())
+    }
 }
 
 pub fn read_to_string(path: &Path) -> Result<String> {
