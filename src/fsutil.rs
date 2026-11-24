@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 pub fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
@@ -15,8 +14,20 @@ pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> 
     let payload = serde_json::to_string_pretty(value)?;
     let temporary = temporary_sibling(path)?;
     fs::write(&temporary, payload)?;
-    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    make_private(&temporary)?;
     fs::rename(&temporary, path).with_context(|| format!("could not write {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_private(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    Ok(fs::set_permissions(path, fs::Permissions::from_mode(0o600))?)
+}
+
+/// Files in the user's profile are private to them on Windows already.
+#[cfg(windows)]
+fn make_private(_path: &Path) -> Result<()> {
     Ok(())
 }
 

@@ -1,10 +1,16 @@
 name: Build
 
-# Release binaries for each platform, uploaded as workflow artifacts.
-# CI runs this on every change; the release workflow attaches them to a release.
+# Release binaries for each platform, uploaded as workflow artifacts. The
+# release workflow attaches them to a release. PRs that change the build or
+# the dependencies run it too, so a broken platform shows up before a release.
 
 on:
   workflow_call:
+  pull_request:
+    paths:
+      - .github/workflows/build.yml
+      - Cargo.toml
+      - Cargo.lock
 
 permissions:
   contents: read
@@ -22,6 +28,12 @@ jobs:
             runner: ubuntu-22.04-arm
           - target: aarch64-apple-darwin
             runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,11 +45,18 @@ jobs:
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           tar -czf "dist/writebook-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" writebook
+      - name: Package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/writebook.exe" -DestinationPath "dist/writebook-${{ matrix.target }}.zip"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: writebook-${{ matrix.target }}
-          path: dist/writebook-${{ matrix.target }}.tar.gz
+          path: dist/writebook-${{ matrix.target }}.*
           if-no-files-found: error

@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const SKILL: &str = include_str!("../skills/writebook/SKILL.md");
 
@@ -38,10 +38,11 @@ pub fn install_files() -> Result<Vec<String>> {
     Ok(lines)
 }
 
+#[cfg(unix)]
 fn link_into_claude(home: &Path) -> Result<String> {
     let links_dir = home.join(".claude/skills");
     let link = links_dir.join("writebook");
-    let target = PathBuf::from("../../.agents/skills/writebook");
+    let target = std::path::PathBuf::from("../../.agents/skills/writebook");
 
     fs::create_dir_all(&links_dir)?;
 
@@ -57,6 +58,24 @@ fn link_into_claude(home: &Path) -> Result<String> {
             std::os::unix::fs::symlink(&target, &link)
                 .with_context(|| format!("could not link {}", link.display()))?;
             Ok("Linked ~/.claude/skills/writebook → ../../.agents/skills/writebook".to_string())
+        }
+    }
+}
+
+/// Symlinks need administrator rights or developer mode on Windows, so Claude
+/// Code gets its own copy of the skill there.
+#[cfg(windows)]
+fn link_into_claude(home: &Path) -> Result<String> {
+    let skill = home.join(".claude/skills/writebook/SKILL.md");
+
+    match fs::read_to_string(&skill) {
+        Ok(existing) if !existing.contains("name: writebook\n") => {
+            Ok("Left ~/.claude/skills/writebook alone — something else already lives there".to_string())
+        }
+        _ => {
+            fs::create_dir_all(skill.parent().unwrap())?;
+            fs::write(&skill, SKILL).with_context(|| format!("could not write {}", skill.display()))?;
+            Ok("Installed the agent skill for Claude Code to ~/.claude/skills/writebook/SKILL.md".to_string())
         }
     }
 }
