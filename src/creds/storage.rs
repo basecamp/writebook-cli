@@ -4,6 +4,10 @@
 //!
 //! Each sign-in is stored under "<site> <profile>", like
 //! "https://books.example.com default".
+//!
+//! A sign-in saved to the file while the keyring was out of reach (say, over
+//! SSH) moves into the keyring the first time the keyring is there to take it.
+//! Signing out removes a sign-in from both places.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -37,7 +41,7 @@ pub fn load(host: &str, profile: &str) -> Result<Option<Credentials>> {
     match backend() {
         Backend::Keyring => match entry(&key)?.get_password() {
             Ok(json) => Ok(Some(serde_json::from_str(&json).with_context(|| format!("could not parse the keyring entry for {key}"))?)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoEntry) => move_from_file_to_keyring(&key),
             Err(error) => Err(error).with_context(|| format!("could not read {key} from the system keyring")),
         },
         Backend::File => Ok(load_file()?.sign_ins.remove(&key)),
@@ -62,21 +66,39 @@ pub fn save(host: &str, profile: &str, credentials: &Credentials) -> Result<()> 
 pub fn delete(host: &str, profile: &str) -> Result<()> {
     let key = key(host, profile);
 
-    match backend() {
-        Backend::Keyring => match entry(&key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).with_context(|| format!("could not remove {key} from the system keyring")),
-        },
-        Backend::File => {
-            let mut file = load_file()?;
-
-            if file.sign_ins.remove(&key).is_some() {
-                fsutil::write_json_privately(&file_path(), &file)?;
-            }
-
-            Ok(())
+    if backend() == Backend::Keyring {
+        match entry(&key)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(error).with_context(|| format!("could not remove {key} from the system keyring")),
         }
     }
+
+    remove_from_file(&key)?;
+    Ok(())
+}
+
+fn move_from_file_to_keyring(key: &str) -> Result<Option<Credentials>> {
+    match load_file()?.sign_ins.remove(key) {
+        Some(credentials) => {
+            entry(key)?
+                .set_password(&serde_json::to_string(&credentials)?)
+                .with_context(|| format!("could not save {key} to the system keyring"))?;
+            remove_from_file(key)?;
+            Ok(Some(credentials))
+        }
+        None => Ok(None),
+    }
+}
+
+fn remove_from_file(key: &str) -> Result<Option<Credentials>> {
+    let mut file = load_file()?;
+    let removed = file.sign_ins.remove(key);
+
+    if removed.is_some() {
+        fsutil::write_json_privately(&file_path(), &file)?;
+    }
+
+    Ok(removed)
 }
 
 fn key(host: &str, profile: &str) -> String {

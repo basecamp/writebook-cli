@@ -120,6 +120,7 @@ pub fn writebook(args: &[&str], env: &[(&str, &str)]) -> Output {
         .args(args)
         .env_remove("WRITEBOOK_TOKEN")
         .env_remove("WRITEBOOK_TOKEN_HOST")
+        .env_remove("WRITEBOOK_PROFILE")
         .env_remove("WRITEBOOK_NO_SIGN_IN")
         .env_remove("CLAUDECODE")
         .env("XDG_CONFIG_HOME", &config)

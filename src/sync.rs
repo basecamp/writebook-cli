@@ -186,19 +186,20 @@ fn cover_filename(manifest: &Manifest, state: &State) -> String {
     }
 }
 
-/// Mirror the book cover into assets/, tracking it in state. Returns quietly
-/// when the local copy was modified by hand — push owns that direction.
-pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, manifest: &Manifest) -> Result<()> {
+/// Mirror the book cover into assets/, tracking it in state. Returns true
+/// when it kept a cover you changed locally instead of the remote one; the
+/// next push uploads it.
+pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, manifest: &Manifest) -> Result<bool> {
     match (&manifest.book.cover, state.cover.clone()) {
         (Some(remote), current) => {
             if current.as_ref().is_some_and(|it| it.remote_checksum == remote.checksum) {
-                return Ok(());
+                return Ok(false);
             }
 
             if let Some(current) = &current {
                 if cover_modified_locally(checkout, current) {
                     eprintln!("warning: the cover changed both locally and remotely — keeping your copy");
-                    return Ok(());
+                    return Ok(true);
                 }
             }
 
@@ -206,7 +207,7 @@ pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut S
             let bytes = client.download(&remote.url)?;
 
             if let Some(current) = &current {
-                if current.filename != filename {
+                if current.filename != filename && !used_by_pages_or_pictures(state, &current.filename) {
                     let _ = std::fs::remove_file(checkout.working_path(&current.filename));
                 }
             }
@@ -222,15 +223,26 @@ pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut S
         (None, Some(current)) => {
             if cover_modified_locally(checkout, &current) {
                 eprintln!("warning: the cover was removed remotely but modified locally — keeping your copy");
-            } else {
-                let _ = std::fs::remove_file(checkout.working_path(&current.filename));
-                state.cover = None;
+                return Ok(true);
             }
+
+            if !used_by_pages_or_pictures(state, &current.filename) {
+                let _ = std::fs::remove_file(checkout.working_path(&current.filename));
+            }
+
+            state.cover = None;
         }
         (None, None) => {}
     }
 
-    Ok(())
+    Ok(false)
+}
+
+/// A cover file can double as a picture or an image in a page. Removing it
+/// along with the cover would break those.
+fn used_by_pages_or_pictures(state: &State, filename: &str) -> bool {
+    let basename = filename.strip_prefix("assets/").unwrap_or(filename);
+    state.leaves.iter().any(|it| it.filename.as_deref() == Some(filename)) || state.uploads.contains_key(basename)
 }
 
 fn cover_modified_locally(checkout: &Checkout, cover: &checkout::CoverState) -> bool {

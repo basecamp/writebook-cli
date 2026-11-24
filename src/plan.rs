@@ -267,8 +267,8 @@ fn ensure_wellformed(checkout: &Checkout, working: &[Entry]) -> Result<()> {
 
 fn ensure_cover_exists(checkout: &Checkout, document: &Document) -> Result<()> {
     if let Some(cover) = document.meta.cover.as_deref().filter(|it| !it.is_empty()) {
-        if !checkout.working_path(cover).exists() {
-            bail!("index.md names {cover} as the cover, which does not exist");
+        if !checkout.working_path(cover).is_file() {
+            bail!("index.md names {cover} as the cover, which is not a file");
         }
     }
 
@@ -520,6 +520,10 @@ mod tests {
         std::fs::remove_file(checkout.working_path("assets/cover.png")).unwrap();
         let error = compare(&checkout, &state, &working, None).err().unwrap();
         assert!(error.to_string().contains("assets/cover.png"), "{error}");
+
+        std::fs::create_dir(checkout.working_path("assets/cover.png")).unwrap();
+        let error = compare(&checkout, &state, &working, None).err().unwrap();
+        assert!(error.to_string().contains("is not a file"), "{error}");
     }
 
     #[test]

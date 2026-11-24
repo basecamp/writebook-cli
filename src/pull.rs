@@ -69,9 +69,15 @@ pub fn run() -> Result<()> {
 
     carry_over_deleted_leaves(&checkout, &state, &comparison, &mut remote_entries)?;
 
-    sync::mirror_cover(&mut client, &checkout, &mut state, &manifest)?;
+    let kept_local_cover = sync::mirror_cover(&mut client, &checkout, &mut state, &manifest)?;
 
-    let remote_index = index::serialize(&sync::book_meta(&manifest, &state), &remote_entries);
+    let mut meta = sync::book_meta(&manifest, &state);
+
+    if kept_local_cover {
+        meta.cover = state.cover.as_ref().map(|it| it.filename.clone());
+    }
+
+    let remote_index = index::serialize(&meta, &remote_entries);
     merge_file(&checkout, "index.md", &remote_index, &mut conflicts)?;
 
     state.leaves = manifest

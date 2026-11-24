@@ -45,8 +45,17 @@ impl Inventory {
         }
     }
 
-    pub fn save(&self) -> Result<()> {
-        fsutil::write_atomically(&path(), toml::to_string(self)?.as_bytes())
+    /// Change the inventory under a lock: load the latest copy, apply the
+    /// change, and save it, so two commands running at once don't overwrite
+    /// each other's changes.
+    pub fn update<T>(change: impl FnOnce(&mut Inventory) -> Result<T>) -> Result<T> {
+        let lock = lock_file()?;
+        lock.lock().context("could not lock the instance list")?;
+
+        let mut inventory = Inventory::load()?;
+        let result = change(&mut inventory)?;
+        fsutil::write_atomically(&path(), toml::to_string(&inventory)?.as_bytes())?;
+        Ok(result)
     }
 
     /// The alias and instance for --instance (an alias, a URL, or a bare host
@@ -66,12 +75,14 @@ impl Inventory {
         Ok((alias, found))
     }
 
-    pub fn add_profile(&mut self, alias: &str, profile: &str) {
-        let instance = self.instances.get_mut(alias).expect("the instance is in the inventory");
+    pub fn add_profile(&mut self, alias: &str, profile: &str) -> Result<()> {
+        let instance = self.instances.get_mut(alias).with_context(|| format!("instance '{alias}' was removed while signing in"))?;
 
         if !instance.profiles.iter().any(|it| it == profile) {
             instance.profiles.push(profile.to_string());
         }
+
+        Ok(())
     }
 
     pub fn lookup(&self, name: &str) -> Option<(&String, &Instance)> {
@@ -159,4 +170,15 @@ pub fn host_of(url: &str) -> Result<String> {
 
 fn path() -> PathBuf {
     creds::config_dir().join("instances.toml")
+}
+
+fn lock_file() -> Result<std::fs::File> {
+    let path = creds::config_dir().join("instances.lock");
+    std::fs::create_dir_all(creds::config_dir())?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("could not open {}", path.display()))
 }

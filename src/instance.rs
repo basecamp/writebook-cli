@@ -11,7 +11,7 @@ use crate::inventory::{DEFAULT_PROFILE, Instance, Inventory, host_of};
 /// Sign in to an instance and keep it in the inventory. Adding one that's
 /// already there signs in to it again, or adds the profile when it's new.
 pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Option<&str>) -> Result<()> {
-    let mut inventory = Inventory::load()?;
+    let inventory = Inventory::load()?;
 
     match inventory.lookup(target).map(|(alias, instance)| (alias.clone(), instance.clone())) {
         Some((existing, instance)) => {
@@ -22,8 +22,7 @@ pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Optio
             let profile = profile.unwrap_or(&instance.default_profile);
 
             if creds::sign_in(&instance.url, profile, code)? {
-                inventory.add_profile(&existing, profile);
-                inventory.save()?;
+                record_sign_in(&existing, &instance.url, profile)?;
                 println!("Signed in to {existing} ({}) as {profile}.", instance.url);
             }
         }
@@ -36,20 +35,49 @@ pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Optio
                 bail!("'{alias}' looks like a URL; an alias is a short name, like work");
             }
 
-            if inventory.instances.contains_key(&alias) {
-                bail!("there already is an instance called '{alias}'. Pick another with --alias");
-            }
+            ensure_alias_free(&inventory, &alias)?;
 
             if creds::sign_in(&host, profile, code)? {
-                inventory.instances.insert(
-                    alias.clone(),
-                    Instance { url: host.clone(), default_profile: profile.to_string(), profiles: vec![profile.to_string()] },
-                );
-                inventory.default.get_or_insert_with(|| alias.clone());
-                inventory.save()?;
+                record_sign_in(&alias, &host, profile)?;
                 println!("Added {alias} ({host}), signed in as {profile}.");
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Add the instance and profile after signing in. Signing in can take
+/// minutes, so this checks the latest inventory again.
+fn record_sign_in(alias: &str, host: &str, profile: &str) -> Result<()> {
+    Inventory::update(|inventory| {
+        match inventory.instances.get_mut(alias) {
+            Some(instance) if instance.url == host => {
+                if !instance.profiles.iter().any(|it| it == profile) {
+                    instance.profiles.push(profile.to_string());
+                }
+            }
+            Some(_) => bail!("there already is an instance called '{alias}'. Pick another with --alias"),
+            None => {
+                if let Some((existing, _)) = inventory.instances.iter().find(|(_, instance)| instance.url == host) {
+                    bail!("{host} is already in the inventory as '{existing}'");
+                }
+
+                inventory.instances.insert(
+                    alias.to_string(),
+                    Instance { url: host.to_string(), default_profile: profile.to_string(), profiles: vec![profile.to_string()] },
+                );
+                inventory.default.get_or_insert_with(|| alias.to_string());
+            }
+        }
+
+        Ok(())
+    })
+}
+
+fn ensure_alias_free(inventory: &Inventory, alias: &str) -> Result<()> {
+    if inventory.instances.contains_key(alias) {
+        bail!("there already is an instance called '{alias}'. Pick another with --alias");
     }
 
     Ok(())
@@ -132,32 +160,32 @@ fn print_markdown(rows: &[Row]) {
 }
 
 pub fn remove(instance: &str) -> Result<()> {
-    let mut inventory = Inventory::load()?;
-    let (alias, removed) = inventory.find(Some(instance))?;
-    let (alias, removed) = (alias.clone(), removed.clone());
+    let (alias, removed) = Inventory::update(|inventory| {
+        let (alias, removed) = inventory.find(Some(instance)).map(|(alias, removed)| (alias.clone(), removed.clone()))?;
 
-    for profile in &removed.profiles {
-        creds::forget(&removed.url, profile)?;
-    }
+        for profile in &removed.profiles {
+            creds::forget(&removed.url, profile)?;
+        }
 
-    inventory.instances.remove(&alias);
+        inventory.instances.remove(&alias);
 
-    if inventory.default.as_ref() == Some(&alias) {
-        inventory.default = None;
-    }
+        if inventory.default.as_ref() == Some(&alias) {
+            inventory.default = None;
+        }
 
-    inventory.save()?;
+        Ok((alias, removed))
+    })?;
 
     println!("Removed {alias} ({}) and signed out of it.", removed.url);
     Ok(())
 }
 
 pub fn set_default(instance: &str) -> Result<()> {
-    let mut inventory = Inventory::load()?;
-    let alias = inventory.find(Some(instance))?.0.clone();
-
-    inventory.default = Some(alias.clone());
-    inventory.save()?;
+    let alias = Inventory::update(|inventory| {
+        let alias = inventory.find(Some(instance))?.0.clone();
+        inventory.default = Some(alias.clone());
+        Ok(alias)
+    })?;
 
     println!("{alias} is now the default instance.");
     Ok(())
