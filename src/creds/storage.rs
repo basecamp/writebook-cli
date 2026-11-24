@@ -58,7 +58,7 @@ pub fn save(host: &str, profile: &str, credentials: &Credentials) -> Result<()> 
         Backend::File => {
             let mut file = load_file()?;
             file.sign_ins.insert(key, credentials.clone());
-            fsutil::write_secret_json(&file_path(), &file)
+            fsutil::write_secret_json(&file_path()?, &file)
         }
     }
 }
@@ -95,7 +95,7 @@ fn remove_from_file(key: &str) -> Result<Option<Credentials>> {
     let removed = file.sign_ins.remove(key);
 
     if removed.is_some() {
-        fsutil::write_secret_json(&file_path(), &file)?;
+        fsutil::write_secret_json(&file_path()?, &file)?;
     }
 
     Ok(removed)
@@ -112,7 +112,9 @@ fn backend() -> Backend {
         } else if keyring_works() {
             Backend::Keyring
         } else {
-            eprintln!("warning: no system keyring, so sign-ins are kept in {}", file_path().display());
+            if let Ok(path) = file_path() {
+                eprintln!("warning: no system keyring, so sign-ins are kept in {}", path.display());
+            }
             Backend::File
         }
     })
@@ -127,7 +129,7 @@ fn entry(key: &str) -> Result<keyring::Entry> {
 }
 
 fn load_file() -> Result<CredentialsFile> {
-    let path = file_path();
+    let path = file_path()?;
 
     if path.exists() {
         let contents = fsutil::read_to_string(&path)?;
@@ -137,6 +139,6 @@ fn load_file() -> Result<CredentialsFile> {
     }
 }
 
-fn file_path() -> PathBuf {
-    config_dir().join("credentials.json")
+fn file_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("credentials.json"))
 }

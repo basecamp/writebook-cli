@@ -35,7 +35,7 @@ pub struct Instance {
 
 impl Inventory {
     pub fn load() -> Result<Inventory> {
-        let path = path();
+        let path = path()?;
 
         if path.exists() {
             let contents = fsutil::read_to_string(&path)?;
@@ -54,7 +54,7 @@ impl Inventory {
 
         let mut inventory = Inventory::load()?;
         let result = change(&mut inventory)?;
-        fsutil::write_atomically(&path(), toml::to_string(&inventory)?.as_bytes())?;
+        fsutil::write_atomically(&path()?, toml::to_string(&inventory)?.as_bytes())?;
         Ok(result)
     }
 
@@ -168,13 +168,12 @@ pub fn host_of(url: &str) -> Result<String> {
     }
 }
 
-fn path() -> PathBuf {
-    creds::config_dir().join("instances.toml")
+fn path() -> Result<PathBuf> {
+    Ok(creds::config_dir()?.join("instances.toml"))
 }
 
 fn lock_file() -> Result<std::fs::File> {
-    let path = creds::config_dir().join("instances.lock");
-    std::fs::create_dir_all(creds::config_dir())?;
+    let path = creds::config_dir()?.join("instances.lock");
     std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)

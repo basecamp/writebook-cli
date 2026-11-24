@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::fsutil;
 
@@ -139,32 +139,40 @@ impl Checkout {
             .context("this checkout has no origin remote — add one with `writebook remote add origin <url>`")
     }
 
-    pub fn working_path(&self, filename: &str) -> PathBuf {
-        self.root.join(filename)
+    /// Where a file of the book lives. File names come from the server and
+    /// from the checkout's own metadata, so neither gets to reach outside the
+    /// checkout: `..`, absolute paths, and symlinks along the way are refused.
+    pub fn working_path(&self, filename: &str) -> Result<PathBuf> {
+        inside(&self.root, filename)
     }
 
-    pub fn base_path(&self, filename: &str) -> PathBuf {
-        self.root.join(".writebook/base").join(filename)
+    pub fn base_path(&self, filename: &str) -> Result<PathBuf> {
+        inside(&self.root.join(".writebook/base"), filename)
     }
 
     pub fn read_working(&self, filename: &str) -> Result<String> {
-        fsutil::read_to_string(&self.working_path(filename))
+        fsutil::read_to_string(&self.working_path(filename)?)
     }
 
     pub fn read_base(&self, filename: &str) -> Result<String> {
-        fsutil::read_to_string(&self.base_path(filename))
+        fsutil::read_to_string(&self.base_path(filename)?)
+    }
+
+    pub fn read_working_bytes(&self, filename: &str) -> Result<Vec<u8>> {
+        let path = self.working_path(filename)?;
+        fs::read(&path).with_context(|| format!("could not read {}", path.display()))
     }
 
     pub fn write_working(&self, filename: &str, contents: &str) -> Result<()> {
-        fsutil::write_atomically(&self.working_path(filename), contents.as_bytes())
+        fsutil::write_atomically(&self.working_path(filename)?, contents.as_bytes())
     }
 
     pub fn write_base(&self, filename: &str, contents: &str) -> Result<()> {
-        fsutil::write_atomically(&self.base_path(filename), contents.as_bytes())
+        fsutil::write_atomically(&self.base_path(filename)?, contents.as_bytes())
     }
 
     pub fn remove_base(&self, filename: &str) -> Result<()> {
-        let path = self.base_path(filename);
+        let path = self.base_path(filename)?;
 
         if path.exists() {
             fs::remove_file(&path).with_context(|| format!("could not remove {}", path.display()))?;
@@ -199,6 +207,26 @@ impl Checkout {
         contents.push_str(".writebook/\n");
         fsutil::write_atomically(&path, contents.as_bytes())
     }
+}
+
+fn inside(root: &Path, filename: &str) -> Result<PathBuf> {
+    let relative = Path::new(filename);
+
+    if filename.is_empty() || !relative.components().all(|it| matches!(it, Component::Normal(_))) {
+        bail!("refusing the file name {filename:?}: it would lead outside the checkout");
+    }
+
+    let mut path = root.to_path_buf();
+
+    for component in relative.components() {
+        path.push(component);
+
+        if fs::symlink_metadata(&path).is_ok_and(|it| it.file_type().is_symlink()) {
+            bail!("refusing {}: it's a symlink, and could lead outside the checkout", path.display());
+        }
+    }
+
+    Ok(path)
 }
 
 fn read_json_or_default<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -305,4 +333,33 @@ pub fn sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_every_file_inside_the_checkout() {
+        let root = std::env::temp_dir().join(format!("writebook-checkout-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let checkout = Checkout::create(&root).unwrap();
+
+        assert_eq!(checkout.working_path("assets/a.png").unwrap(), root.join("assets/a.png"));
+        assert_eq!(checkout.base_path("intro.md").unwrap(), root.join(".writebook/base/intro.md"));
+
+        for filename in ["", "../outside.md", "assets/../../outside.md", "/etc/passwd", "./intro.md"] {
+            assert!(checkout.working_path(filename).is_err(), "{filename:?}");
+            assert!(checkout.base_path(filename).is_err(), "{filename:?}");
+        }
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(std::env::temp_dir(), root.join("linked")).unwrap();
+            assert!(checkout.working_path("linked/outside.md").is_err());
+            assert!(checkout.write_working("linked", "x").is_err());
+        }
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 }

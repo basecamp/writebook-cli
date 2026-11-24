@@ -61,7 +61,7 @@ impl Web {
 
     /// GET with query parameters, encoded for the URL.
     pub fn get_query(&self, path: &str, accept: &str, query: &[(&str, &str)]) -> Result<Page> {
-        let mut request = self.agent.get(&self.url(path)).header("Accept", accept).query_pairs(query.iter().copied());
+        let mut request = self.agent.get(&crate::api::url_on(&self.host, path)?).header("Accept", accept).query_pairs(query.iter().copied());
 
         if let Some(token) = &self.token {
             request = request.header("Authorization", &format!("Bearer {token}"));
@@ -71,7 +71,7 @@ impl Web {
     }
 
     pub fn post_form(&self, path: &str, form: &[(&str, &str)], cookie: Option<&str>) -> Result<Page> {
-        let mut request = self.agent.post(&self.url(path)).header("Accept", "text/html");
+        let mut request = self.agent.post(&crate::api::url_on(&self.host, path)?).header("Accept", "text/html");
 
         if let Some(token) = &self.token {
             request = request.header("Authorization", &format!("Bearer {token}"));
@@ -85,11 +85,7 @@ impl Web {
     }
 
     pub fn url(&self, path: &str) -> String {
-        if path.starts_with("http://") || path.starts_with("https://") {
-            path.to_string()
-        } else {
-            format!("{}{}", self.host, path)
-        }
+        format!("{}{}", self.host, path)
     }
 }
 

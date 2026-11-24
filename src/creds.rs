@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api;
+use crate::fsutil;
 use crate::inventory;
 
 mod sign_in;
@@ -76,6 +77,15 @@ fn given_token(host: &str) -> Result<Option<String>> {
     Ok(Some(given.token.clone()))
 }
 
+/// Sign-ins only travel over https, or plain http to this machine.
+fn ensure_private_connection(host: &str) -> Result<()> {
+    if host.starts_with("http://") && !is_local(host) {
+        bail!("{host} isn't https, so signing in to it would send your sign-in in the clear. Use its https:// address");
+    }
+
+    Ok(())
+}
+
 pub fn normalize_host(host: &str) -> String {
     host.trim().trim_end_matches('/').to_lowercase()
 }
@@ -93,11 +103,12 @@ pub fn access_token(host: &str) -> Result<String> {
         return Ok(token);
     }
 
+    ensure_private_connection(host)?;
     let profile = inventory::profile_for(host)?;
 
     match storage::load(host, &profile)? {
         Some(credentials) if !expired(&credentials) => Ok(credentials.access_token),
-        Some(credentials) => match refresh(host, &profile, &credentials.refresh_token) {
+        Some(credentials) => match refresh(host, &profile, &credentials) {
             Ok(refreshed) => Ok(refreshed.access_token),
             Err(_) => Ok(login(host, &profile)?.access_token),
         },
@@ -112,10 +123,11 @@ pub fn renewed_access_token(host: &str) -> Result<String> {
         bail!("{host} did not accept the token from WRITEBOOK_TOKEN");
     }
 
+    ensure_private_connection(host)?;
     let profile = inventory::profile_for(host)?;
 
     match storage::load(host, &profile)? {
-        Some(credentials) => match refresh(host, &profile, &credentials.refresh_token) {
+        Some(credentials) => match refresh(host, &profile, &credentials) {
             Ok(refreshed) => Ok(refreshed.access_token),
             Err(_) => Ok(login(host, &profile)?.access_token),
         },
@@ -137,8 +149,10 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
         return Ok(None);
     };
 
+    ensure_private_connection(host)?;
+
     if expired(&credentials) {
-        match refresh(host, &profile, &credentials.refresh_token) {
+        match refresh(host, &profile, &credentials) {
             Ok(refreshed) => Ok(Some(refreshed.access_token)),
             Err(error) => {
                 eprintln!("note: could not renew your sign-in to {host} ({error:#}); reading without it");
@@ -156,9 +170,32 @@ pub fn signed_in(host: &str, profile: &str) -> Result<bool> {
     Ok(storage::load(host, profile)?.is_some())
 }
 
-/// Sign out of a site as this profile.
+/// Sign out of a site as this profile, and tell the site to stop honoring
+/// the sign-in, so a copy of it left anywhere is no use.
 pub fn forget(host: &str, profile: &str) -> Result<()> {
+    if let Some(credentials) = storage::load(host, profile)? {
+        if let Err(error) = revoke(host, &credentials) {
+            eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#}); it was removed here anyway");
+        }
+    }
+
+    sign_in::forget_pending(host)?;
     storage::delete(host, profile)
+}
+
+fn revoke(host: &str, credentials: &Credentials) -> Result<()> {
+    ensure_private_connection(host)?;
+
+    let response = api::agent()
+        .post(&format!("{host}/oauth/revocations"))
+        .send_form([("client_id", CLIENT_ID), ("token", credentials.refresh_token.as_str())])
+        .with_context(|| format!("could not reach {host}"))?;
+
+    if response.status() == 200 {
+        Ok(())
+    } else {
+        bail!("{host} answered {}", response.status())
+    }
 }
 
 fn login(host: &str, profile: &str) -> Result<Credentials> {
@@ -174,13 +211,25 @@ fn login(host: &str, profile: &str) -> Result<Credentials> {
     sign_in::at_terminal(host, profile)
 }
 
-fn refresh(host: &str, profile: &str, refresh_token: &str) -> Result<Credentials> {
+/// Trade the refresh token for new credentials. Each refresh token works
+/// once, so two commands refreshing at the same time would sign each other
+/// out: the lock lets one go first, and the other then finds its work done.
+fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials> {
+    let lock = lock_file()?;
+    lock.lock().context("could not lock the sign-ins")?;
+
+    if let Some(current) = storage::load(host, profile)? {
+        if current.refresh_token != stale.refresh_token && !expired(&current) {
+            return Ok(current);
+        }
+    }
+
     let (status, body) = post_token_request(
         host,
         &[
             ("client_id", CLIENT_ID),
             ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token),
+            ("refresh_token", &stale.refresh_token),
         ],
     )?;
 
@@ -191,6 +240,17 @@ fn refresh(host: &str, profile: &str, refresh_token: &str) -> Result<Credentials
     let credentials = credentials_from(&body)?;
     storage::save(host, profile, &credentials)?;
     Ok(credentials)
+}
+
+fn lock_file() -> Result<std::fs::File> {
+    let path = config_dir()?.join("sign-ins.lock");
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("could not open {}", path.display()))
 }
 
 fn request_device_authorization(host: &str) -> Result<Value> {
@@ -229,12 +289,17 @@ fn expired(credentials: &Credentials) -> bool {
     credentials.expires_at <= now() + EXPIRY_SLACK
 }
 
-pub fn config_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|it| !it.is_empty()) {
+/// Where sign-ins and the instance list are kept, created readable by you
+/// alone if it isn't there yet.
+pub fn config_dir() -> Result<PathBuf> {
+    let dir = if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|it| !it.is_empty()) {
         PathBuf::from(dir).join("writebook")
     } else {
-        dirs::home_dir().expect("could not determine the home directory").join(".config/writebook")
-    }
+        dirs::home_dir().context("could not determine the home directory")?.join(".config/writebook")
+    };
+
+    fsutil::create_private_dir(&dir)?;
+    Ok(dir)
 }
 
 /// The device flow needs a person to read the code and approve it. Without a

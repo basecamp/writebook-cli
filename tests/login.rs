@@ -5,12 +5,11 @@ mod support;
 
 use support::{Server, reply, stderr, stdout, writebook};
 
-const AUTHORIZATION: &str = r#"{"device_code":"wb_dc_secret","user_code":"ABCD-EFGH","verification_uri":"http://x/oauth/device_verification","verification_uri_complete":"http://x/oauth/device_verification?user_code=ABCD-EFGH","expires_in":600,"interval":5}"#;
 const TOKENS: &str = r#"{"access_token":"wb_at_new","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_new"}"#;
 
 fn fake_writebook() -> Server {
     Server::start(|request| match (request.method.as_str(), request.path.as_str()) {
-        ("POST", "/oauth/device_authorizations") => reply(200, AUTHORIZATION),
+        ("POST", "/oauth/device_authorizations") => support::device_authorization(request),
         ("POST", "/oauth/tokens") if request.body.contains("approval_code=WXYZ-2345") => reply(200, TOKENS),
         ("POST", "/oauth/tokens") => reply(400, r#"{"error":"invalid_grant","error_description":"no match"}"#),
         _ => reply(404, ""),
@@ -27,7 +26,7 @@ fn signs_in_in_two_steps_with_the_approval_code() {
 
     let started = writebook(&add, &env);
     assert!(started.status.success(), "{}", stderr(&started));
-    assert!(stdout(&started).contains("http://x/oauth/device_verification?user_code=ABCD-EFGH"), "{}", stdout(&started));
+    assert!(stdout(&started).contains(&format!("{}/oauth/device_verification?user_code=ABCD-EFGH", server.url)), "{}", stdout(&started));
     assert!(stdout(&started).contains("--code"), "{}", stdout(&started));
     assert!(stdout(&writebook(&["instance", "list"], &env)).contains("No instances"), "added only once signed in");
 

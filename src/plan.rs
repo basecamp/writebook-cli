@@ -256,7 +256,7 @@ fn ensure_wellformed(checkout: &Checkout, working: &[Entry]) -> Result<()> {
 
             seen.push(filename);
 
-            if !checkout.working_path(filename).exists() {
+            if !checkout.working_path(filename)?.exists() {
                 bail!("index.md references {filename}, which does not exist");
             }
         }
@@ -267,7 +267,7 @@ fn ensure_wellformed(checkout: &Checkout, working: &[Entry]) -> Result<()> {
 
 fn ensure_cover_exists(checkout: &Checkout, document: &Document) -> Result<()> {
     if let Some(cover) = document.meta.cover.as_deref().filter(|it| !it.is_empty()) {
-        if !checkout.working_path(cover).is_file() {
+        if !checkout.working_path(cover)?.is_file() {
             bail!("index.md names {cover} as the cover, which is not a file");
         }
     }
@@ -278,7 +278,7 @@ fn ensure_cover_exists(checkout: &Checkout, document: &Document) -> Result<()> {
 /// The tracked cover file was edited, replaced, or deleted since the last sync.
 fn cover_file_changed(checkout: &Checkout, state: &State) -> bool {
     match &state.cover {
-        Some(cover) => match std::fs::read(checkout.working_path(&cover.filename)) {
+        Some(cover) => match checkout.read_working_bytes(&cover.filename) {
             Ok(bytes) => crate::checkout::sha256(&bytes) != cover.sha256,
             Err(_) => true,
         },
@@ -368,7 +368,7 @@ fn entry_changed(checkout: &Checkout, leaf: &LeafState, entry: &Entry) -> bool {
 }
 
 fn picture_image_changed(checkout: &Checkout, leaf: &LeafState, filename: &str) -> bool {
-    match (&leaf.image_sha256, std::fs::read(checkout.working_path(filename))) {
+    match (&leaf.image_sha256, checkout.read_working_bytes(filename)) {
         (Some(synced), Ok(bytes)) => crate::checkout::sha256(&bytes) != *synced,
         (None, Ok(_)) => true,
         (_, Err(_)) => false,
@@ -407,7 +407,7 @@ mod tests {
         checkout.write_base("index.md", &index).unwrap();
         checkout.write_working("intro.md", "hello\n").unwrap();
         checkout.write_base("intro.md", "hello\n").unwrap();
-        std::fs::write(checkout.working_path("assets/pic.jpg"), b"JPEG").unwrap();
+        std::fs::write(checkout.working_path("assets/pic.jpg").unwrap(), b"JPEG").unwrap();
 
         let state = State {
             version: 1,
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn a_cover_named_in_front_matter_is_a_local_cover_change() {
         let (checkout, state, _) = fixture();
-        std::fs::write(checkout.working_path("assets/cover.png"), b"PNG").unwrap();
+        std::fs::write(checkout.working_path("assets/cover.png").unwrap(), b"PNG").unwrap();
         checkout
             .write_working("index.md", &checkout.read_working("index.md").unwrap().replace("theme: blue\n", "theme: blue\ncover: assets/cover.png\n"))
             .unwrap();
@@ -517,11 +517,11 @@ mod tests {
         assert!(comparison.cover_changed_locally);
         assert!(!comparison.book_changed_locally, "the cover alone doesn't touch the title, author or theme");
 
-        std::fs::remove_file(checkout.working_path("assets/cover.png")).unwrap();
+        std::fs::remove_file(checkout.working_path("assets/cover.png").unwrap()).unwrap();
         let error = compare(&checkout, &state, &working, None).err().unwrap();
         assert!(error.to_string().contains("assets/cover.png"), "{error}");
 
-        std::fs::create_dir(checkout.working_path("assets/cover.png")).unwrap();
+        std::fs::create_dir(checkout.working_path("assets/cover.png").unwrap()).unwrap();
         let error = compare(&checkout, &state, &working, None).err().unwrap();
         assert!(error.to_string().contains("is not a file"), "{error}");
     }
@@ -529,11 +529,11 @@ mod tests {
     #[test]
     fn a_replaced_cover_file_is_a_local_cover_change() {
         let (checkout, mut state, working) = fixture();
-        std::fs::write(checkout.working_path("assets/cover.png"), b"PNG").unwrap();
+        std::fs::write(checkout.working_path("assets/cover.png").unwrap(), b"PNG").unwrap();
         state.cover = Some(CoverState { filename: "assets/cover.png".into(), remote_checksum: "r".into(), sha256: crate::checkout::sha256(b"PNG") });
         assert!(!compare(&checkout, &state, &working, None).unwrap().cover_changed_locally);
 
-        std::fs::write(checkout.working_path("assets/cover.png"), b"NEW PNG").unwrap();
+        std::fs::write(checkout.working_path("assets/cover.png").unwrap(), b"NEW PNG").unwrap();
         assert!(compare(&checkout, &state, &working, None).unwrap().cover_changed_locally);
     }
 
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn a_renamed_page_file_with_identical_content_is_recognized() {
         let (checkout, state, _) = fixture();
-        std::fs::rename(checkout.working_path("intro.md"), checkout.working_path("welcome.md")).unwrap();
+        std::fs::rename(checkout.working_path("intro.md").unwrap(), checkout.working_path("welcome.md").unwrap()).unwrap();
         checkout.write_working("index.md", &format!("{META}# Part One\n[Intro](welcome.md)\n![A pic](assets/pic.jpg)\n")).unwrap();
         let working = crate::index::parse(&checkout.read_working("index.md").unwrap()).unwrap();
 
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn a_changed_picture_file_is_locally_modified() {
         let (checkout, state, working) = fixture();
-        std::fs::write(checkout.working_path("assets/pic.jpg"), b"JPEG2").unwrap();
+        std::fs::write(checkout.working_path("assets/pic.jpg").unwrap(), b"JPEG2").unwrap();
 
         let comparison = compare(&checkout, &state, &working, None).unwrap();
         assert!(comparison.leaves[2].changed_locally);

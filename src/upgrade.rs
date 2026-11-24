@@ -26,6 +26,8 @@ fn installed_by_mise(executable: &Path) -> bool {
 fn upgrade_with_mise() -> Result<()> {
     let status = Command::new("mise")
         .args(["upgrade", MISE_TOOL])
+        .env_remove("WRITEBOOK_TOKEN")
+        .env_remove("WRITEBOOK_TOKEN_HOST")
         .status()
         .context("could not run mise. Is it on your PATH?")?;
 
