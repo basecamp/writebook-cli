@@ -126,7 +126,7 @@ fn start_pending(host: &str, profile: &str) -> Result<()> {
 
     let mut file = load_pending()?;
     file.sign_ins.insert(pending_key(host, profile), pending.clone());
-    fsutil::write_json_privately(&pending_path(), &file)?;
+    fsutil::write_secret_json(&pending_path(), &file)?;
 
     let minutes = pending.expires_at.saturating_sub(now()).div_ceil(60);
 
@@ -153,7 +153,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
 
     if pending.expires_at <= now() {
         file.sign_ins.remove(&key);
-        fsutil::write_json_privately(&pending_path(), &file)?;
+        fsutil::write_secret_json(&pending_path(), &file)?;
         bail!("the sign-in link for {host} has expired. Start again with `{login}`");
     }
 
@@ -161,7 +161,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
         Attempt::SignedIn(credentials) => {
             storage::save(host, profile, &credentials)?;
             file.sign_ins.remove(&key);
-            fsutil::write_json_privately(&pending_path(), &file)?;
+            fsutil::write_secret_json(&pending_path(), &file)?;
             println!("Signed in to {host}.");
             Ok(())
         }
