@@ -98,12 +98,12 @@ pub fn materialize_leaf(
                 title: content.title.clone(),
                 fingerprint: content.fingerprint,
                 filename: filename.clone(),
-                theme: content.theme,
+                theme: content.theme.clone(),
                 image_remote_checksum: None,
                 image_sha256: None,
             });
 
-            Ok(Some(Entry::Section { title: content.title, filename }))
+            Ok(Some(Entry::Section { title: content.title, filename, theme: content.theme }))
         }
         "Picture" => {
             // A picture's index line carries its caption, so that's the title
@@ -166,12 +166,23 @@ pub fn mirror_uploads(client: &mut api::Client, checkout: &Checkout, state: &mut
     Ok(())
 }
 
-pub fn book_meta(manifest: &Manifest) -> checkout::BookMeta {
+pub fn book_meta(manifest: &Manifest, state: &State) -> checkout::BookMeta {
     checkout::BookMeta {
         title: manifest.book.title.clone(),
         subtitle: manifest.book.subtitle.clone().unwrap_or_default(),
         author: manifest.book.author.clone().unwrap_or_default(),
         theme: manifest.book.theme.clone(),
+        cover: Some(cover_filename(manifest, state)),
+    }
+}
+
+/// Where the remote cover lives in assets/: the tracked file when it's the
+/// same image, otherwise where mirror_cover puts it. Empty for no cover.
+fn cover_filename(manifest: &Manifest, state: &State) -> String {
+    match (&manifest.book.cover, &state.cover) {
+        (Some(remote), Some(current)) if current.remote_checksum == remote.checksum => current.filename.clone(),
+        (Some(remote), _) => format!("assets/cover-{}", sanitize_filename(&remote.filename)),
+        (None, _) => String::new(),
     }
 }
 

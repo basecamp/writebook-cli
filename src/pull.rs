@@ -69,10 +69,10 @@ pub fn run() -> Result<()> {
 
     carry_over_deleted_leaves(&checkout, &state, &comparison, &mut remote_entries)?;
 
-    let remote_index = index::serialize(&sync::book_meta(&manifest), &remote_entries);
-    merge_file(&checkout, "index.md", &remote_index, &mut conflicts)?;
-
     sync::mirror_cover(&mut client, &checkout, &mut state, &manifest)?;
+
+    let remote_index = index::serialize(&sync::book_meta(&manifest, &state), &remote_entries);
+    merge_file(&checkout, "index.md", &remote_index, &mut conflicts)?;
 
     state.leaves = manifest
         .leaves
@@ -136,7 +136,7 @@ fn apply_remote_change(
             let filename = apply_section_body(checkout, state, position, leaf, &content, &body, taken, conflicts)?;
             state.leaves[position].theme = content.theme.clone();
 
-            Some(Entry::Section { title: content.title.clone(), filename })
+            Some(Entry::Section { title: content.title.clone(), filename, theme: content.theme.clone() })
         }
         "Picture" => {
             let caption = content.caption.clone().unwrap_or_default();

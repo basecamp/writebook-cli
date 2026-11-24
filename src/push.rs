@@ -98,7 +98,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
             state.leaves.push(leaf);
             Ok(id)
         }
-        Entry::Section { title, filename } => {
+        Entry::Section { title, filename, theme } => {
             let body = match filename {
                 Some(filename) => checkout.read_working(filename)?,
                 None => String::new(),
@@ -106,7 +106,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
 
             let response = client.post(
                 &format!("/books/{book_id}/sections.json"),
-                &json!({ "leaf": { "title": title }, "section": { "body": body } }),
+                &json!({ "leaf": { "title": title }, "section": section_params(&body, theme) }),
             )?;
 
             if let Some(filename) = filename {
@@ -172,7 +172,7 @@ fn update_leaf(
             push_page_body(client, checkout, state, book_id, &mut leaf, entry)?;
             update_state_leaf(state, leaf);
         }
-        Entry::Section { title, filename } => {
+        Entry::Section { title, filename, theme } => {
             let body = match filename {
                 Some(filename) => checkout.read_working(filename)?,
                 None => String::new(),
@@ -183,7 +183,7 @@ fn update_leaf(
                 &sync::leaf_path(book_id, "Section", known.id),
                 &json!({
                     "leaf": { "title": title },
-                    "section": { "body": body },
+                    "section": section_params(&body, theme),
                     "base_fingerprint": known.fingerprint,
                 }),
             )?;
@@ -196,6 +196,7 @@ fn update_leaf(
             leaf.title = title.clone();
             leaf.filename = filename.clone();
             leaf.fingerprint = fingerprint(&response);
+            leaf.theme = response["theme"].as_str().map(str::to_string).or(leaf.theme);
             update_state_leaf(state, leaf);
         }
         Entry::Picture { caption, filename } => {
@@ -238,6 +239,15 @@ fn update_leaf(
     }
 
     Ok(())
+}
+
+/// A section's body, and its theme when index.md names one. Without one the
+/// server keeps the section's current theme.
+fn section_params(body: &str, theme: &Option<String>) -> serde_json::Value {
+    match theme {
+        Some(theme) => json!({ "body": body, "theme": theme }),
+        None => json!({ "body": body }),
+    }
 }
 
 /// Upload the page's body: any new or changed local image in assets/ goes up
@@ -381,35 +391,70 @@ fn push_book(
         println!("  updated: book metadata");
     }
 
-    push_cover(client, checkout, state, book_id)
+    push_cover(client, checkout, state, book_id, document.meta.cover.as_deref())
 }
 
-fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, book_id: u64) -> Result<()> {
-    let Some(cover) = state.cover.clone() else {
-        return Ok(());
+/// Bring the remote cover in line with index.md's `cover:` line: upload the
+/// named file when it's new or changed, or remove the cover when the line is
+/// empty. Without a `cover:` line, the tracked cover file decides.
+fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, book_id: u64, cover: Option<&str>) -> Result<()> {
+    let filename = match cover {
+        Some(cover) => cover.to_string(),
+        None => match &state.cover {
+            Some(tracked) => tracked.filename.clone(),
+            None => return Ok(()),
+        },
     };
 
-    match std::fs::read(checkout.working_path(&cover.filename)) {
+    if filename.is_empty() {
+        if state.cover.is_some() {
+            remove_cover(client, state, book_id)?;
+        }
+
+        return Ok(());
+    }
+
+    match std::fs::read(checkout.working_path(&filename)) {
         Ok(bytes) => {
             let sha256 = checkout::sha256(&bytes);
+            let unchanged = state.cover.as_ref().is_some_and(|it| it.filename == filename && it.sha256 == sha256);
 
-            if sha256 != cover.sha256 {
-                let basename = cover.filename.strip_prefix("assets/").unwrap_or(&cover.filename);
+            if !unchanged {
+                let basename = filename.strip_prefix("assets/").unwrap_or(&filename);
 
                 client.patch_multipart(
                     &format!("/books/{book_id}.json"),
                     &[Part { name: "book[cover]", filename: Some(basename), data: PartData::Bytes(&bytes) }],
                 )?;
 
-                state.cover = Some(checkout::CoverState { filename: cover.filename, remote_checksum: String::new(), sha256 });
+                state.cover = Some(checkout::CoverState { filename, remote_checksum: String::new(), sha256 });
+                record_remote_cover(client, state, book_id)?;
                 println!("  updated: cover");
             }
         }
-        Err(_) => {
-            client.patch(&format!("/books/{book_id}.json"), &json!({ "remove_cover": "true" }))?;
-            state.cover = None;
-            println!("  removed: cover");
-        }
+        Err(_) => remove_cover(client, state, book_id)?,
+    }
+
+    Ok(())
+}
+
+fn remove_cover(client: &mut api::Client, state: &mut State, book_id: u64) -> Result<()> {
+    client.patch(&format!("/books/{book_id}.json"), &json!({ "remove_cover": "true" }))?;
+    state.cover = None;
+    record_remote_cover(client, state, book_id)?;
+    println!("  removed: cover");
+    Ok(())
+}
+
+/// Changing the cover changes the book's fingerprint, and the server names
+/// the cover's checksum only in the manifest. Record both, so the next pull
+/// sees no remote change and doesn't download the same cover again.
+fn record_remote_cover(client: &mut api::Client, state: &mut State, book_id: u64) -> Result<()> {
+    let manifest = sync::fetch_manifest(client, book_id)?;
+    state.book_fingerprint = manifest.book.fingerprint;
+
+    if let (Some(cover), Some(remote)) = (state.cover.as_mut(), manifest.book.cover) {
+        cover.remote_checksum = remote.checksum;
     }
 
     Ok(())

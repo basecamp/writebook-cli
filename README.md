@@ -90,16 +90,18 @@ title: Field Notes
 subtitle:
 author: Stanko
 theme: green
+cover: assets/cover.jpg
 ---
 
-# Part One                            ← a section
+# Part One {theme=blue}               ← a section with its theme
 # [Part Two](part-two.md)             ← a section with body text
 [Getting Started](getting-started.md) ← a page; link text is the title
 ![A sunset](assets/sunset.jpg)        ← a picture; alt text is the caption
 ```
 
 Adding a line (and its file) creates a leaf on push; deleting a line trashes
-it. Page files hold only the body — titles live in `index.md`. Images embedded
+it. `cover:` names the cover image in `assets/` (empty for none), and a
+section's theme goes at the end of its line as `{theme=...}`. Page files hold only the body — titles live in `index.md`. Images embedded
 in a page reference `assets/` by relative path, so local Markdown preview just
 works; push uploads new images and pull mirrors remote ones.
 

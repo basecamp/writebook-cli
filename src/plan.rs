@@ -76,11 +76,13 @@ pub struct Comparison {
     pub order_changed_remotely: bool,
     pub book_changed_locally: bool,
     pub book_changed_remotely: bool,
+    pub cover_changed_locally: bool,
 }
 
 impl Comparison {
     pub fn changed_locally(&self) -> bool {
         self.book_changed_locally
+            || self.cover_changed_locally
             || self.order_changed_locally
             || !self.added_locally.is_empty()
             || self.leaves.iter().any(|it| it.changed_locally || it.deleted_locally())
@@ -97,6 +99,9 @@ impl Comparison {
 pub fn compare(checkout: &Checkout, state: &State, document: &Document, manifest: Option<&Manifest>) -> Result<Comparison> {
     let working = &document.entries;
     ensure_wellformed(checkout, working)?;
+    ensure_cover_exists(checkout, document)?;
+
+    let base_meta = crate::index::parse(&checkout.read_base("index.md")?)?.meta;
 
     let claims = claim_entries(state, working, checkout)?;
 
@@ -165,8 +170,9 @@ pub fn compare(checkout: &Checkout, state: &State, document: &Document, manifest
         added_remotely,
         order_changed_locally: local_order != surviving_base_local,
         order_changed_remotely: manifest.is_some() && surviving_remote != surviving_base_remote,
-        book_changed_locally: document.meta != crate::index::parse(&checkout.read_base("index.md")?)?.meta,
+        book_changed_locally: document.meta.without_cover() != base_meta.without_cover(),
         book_changed_remotely: manifest.is_some_and(|it| it.book.fingerprint != state.book_fingerprint),
+        cover_changed_locally: document.meta.cover != base_meta.cover || cover_file_changed(checkout, state),
     })
 }
 
@@ -259,6 +265,27 @@ fn ensure_wellformed(checkout: &Checkout, working: &[Entry]) -> Result<()> {
     Ok(())
 }
 
+fn ensure_cover_exists(checkout: &Checkout, document: &Document) -> Result<()> {
+    if let Some(cover) = document.meta.cover.as_deref().filter(|it| !it.is_empty()) {
+        if !checkout.working_path(cover).exists() {
+            bail!("index.md names {cover} as the cover, which does not exist");
+        }
+    }
+
+    Ok(())
+}
+
+/// The tracked cover file was edited, replaced, or deleted since the last sync.
+fn cover_file_changed(checkout: &Checkout, state: &State) -> bool {
+    match &state.cover {
+        Some(cover) => match std::fs::read(checkout.working_path(&cover.filename)) {
+            Ok(bytes) => crate::checkout::sha256(&bytes) != cover.sha256,
+            Err(_) => true,
+        },
+        None => false,
+    }
+}
+
 /// Match each state leaf to the working index entry that carries it now:
 /// pages, pictures, and body-bearing sections by filename, bare sections by
 /// title (in order, so duplicate titles pair up positionally). A page whose
@@ -315,6 +342,12 @@ fn claim_entries(state: &State, working: &[Entry], checkout: &Checkout) -> Resul
 fn entry_changed(checkout: &Checkout, leaf: &LeafState, entry: &Entry) -> bool {
     if entry.title() != leaf.title {
         return true;
+    }
+
+    if let Entry::Section { theme: Some(theme), .. } = entry {
+        if leaf.theme.as_ref() != Some(theme) {
+            return true;
+        }
     }
 
     match entry.filename() {
@@ -451,6 +484,53 @@ mod tests {
 
         assert!(!comparison.changed_locally());
         assert!(!comparison.changed_remotely());
+    }
+
+    #[test]
+    fn a_new_section_theme_is_a_local_change_and_a_missing_one_is_not() {
+        let (checkout, mut state, _) = fixture();
+        state.leaves[0].theme = Some("green".into());
+
+        let unchanged = crate::index::parse(&checkout.read_working("index.md").unwrap()).unwrap();
+        assert!(!compare(&checkout, &state, &unchanged, None).unwrap().changed_locally());
+
+        checkout
+            .write_working("index.md", &checkout.read_working("index.md").unwrap().replace("# Part One", "# Part One {theme=violet}"))
+            .unwrap();
+        let working = crate::index::parse(&checkout.read_working("index.md").unwrap()).unwrap();
+
+        let comparison = compare(&checkout, &state, &working, None).unwrap();
+        assert!(comparison.leaves[0].changed_locally);
+        assert!(!comparison.leaves[1].changed_locally);
+    }
+
+    #[test]
+    fn a_cover_named_in_front_matter_is_a_local_cover_change() {
+        let (checkout, state, _) = fixture();
+        std::fs::write(checkout.working_path("assets/cover.png"), b"PNG").unwrap();
+        checkout
+            .write_working("index.md", &checkout.read_working("index.md").unwrap().replace("theme: blue\n", "theme: blue\ncover: assets/cover.png\n"))
+            .unwrap();
+        let working = crate::index::parse(&checkout.read_working("index.md").unwrap()).unwrap();
+
+        let comparison = compare(&checkout, &state, &working, None).unwrap();
+        assert!(comparison.cover_changed_locally);
+        assert!(!comparison.book_changed_locally, "the cover alone doesn't touch the title, author or theme");
+
+        std::fs::remove_file(checkout.working_path("assets/cover.png")).unwrap();
+        let error = compare(&checkout, &state, &working, None).err().unwrap();
+        assert!(error.to_string().contains("assets/cover.png"), "{error}");
+    }
+
+    #[test]
+    fn a_replaced_cover_file_is_a_local_cover_change() {
+        let (checkout, mut state, working) = fixture();
+        std::fs::write(checkout.working_path("assets/cover.png"), b"PNG").unwrap();
+        state.cover = Some(CoverState { filename: "assets/cover.png".into(), remote_checksum: "r".into(), sha256: crate::checkout::sha256(b"PNG") });
+        assert!(!compare(&checkout, &state, &working, None).unwrap().cover_changed_locally);
+
+        std::fs::write(checkout.working_path("assets/cover.png"), b"NEW PNG").unwrap();
+        assert!(compare(&checkout, &state, &working, None).unwrap().cover_changed_locally);
     }
 
     #[test]

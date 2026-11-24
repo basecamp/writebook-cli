@@ -200,15 +200,20 @@ title: The Field Guide
 subtitle:
 author: Stanko
 theme: green
+cover: assets/cover.jpg
 ---
 
-# Part One                            ← a section
+# Part One {theme=blue}               ← a section with the blue theme
 # [Part Two](part-two.md)             ← a section with text, stored in part-two.md
 [Getting Started](getting-started.md) ← a page. The link text is the page title.
 ![A sunset](assets/sunset.jpg)        ← a picture. The alt text is the caption.
 ```
 
 - To change the book's title, author, or theme, edit the front matter.
+- To set or replace the cover, put the image in `assets/` and write its path
+  after `cover:`. To remove the cover, leave `cover:` empty.
+- To change a section's theme, write `{theme=<name>}` at the end of its line.
+  The themes are black, blue, green, magenta, orange, violet, and white.
 - To rename a page, edit its link text. Don't rename the file.
 - To move a page, move its line.
 - To add a page, create a `.md` file, add a line for it in `index.md`, and
@@ -238,7 +243,3 @@ To replace a picture, overwrite its file in `assets/`.
   markers. `pull` and `push` refuse to run while a file has conflict markers.
 - If someone edits the book on the web while you push, the push fails with a
   409 error. Run `writebook pull`, then push again.
-
-## Limits
-
-To change a section's theme or upload a new cover, use the Writebook website.
