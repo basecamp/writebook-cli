@@ -20,6 +20,7 @@ mod setup;
 mod skill;
 mod status;
 mod sync;
+mod upgrade;
 mod web;
 
 use anyhow::Result;
@@ -128,6 +129,9 @@ enum Command {
         #[usage(subcommand)]
         command: ShellCompletionCommand,
     },
+    /// Upgrade writebook to the latest release
+    #[usage(help_heading = "Setup commands")]
+    Upgrade,
     /// Print or install the agent skill for coding agents
     #[usage(help_heading = "Agent commands")]
     Skill {
@@ -353,5 +357,6 @@ fn run(cli: Cli) -> Result<()> {
             ShellCompletionCommand::Print { shell } => completions::print(&shell),
             ShellCompletionCommand::Install { shell } => completions::install(&shell),
         },
+        Command::Upgrade => upgrade::run(),
     }
 }
