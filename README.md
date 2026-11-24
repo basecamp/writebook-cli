@@ -4,6 +4,20 @@ Read, clone and edit books on any Writebook instance.
 
 ## Installation
 
+With [mise](https://mise.jdx.dev):
+
+```sh
+mise use -g github:basecamp/writebook-cli
+```
+
+On Omarchy:
+
+```sh
+omarchy-mise-install github:basecamp/writebook-cli writebook
+```
+
+To upgrade, run `writebook upgrade`.
+
 ## Usage
 
 Sign in to your Writebook. The CLI prints a link to approve in the browser:
@@ -77,4 +91,4 @@ docker exec -i writebook bin/rails runner - < tests/support/seed.rb
 WRITEBOOK_LIVE_URL=http://localhost:3000 cargo test --test live
 ```
 
-Pushing a `v*` tag publishes release binaries for Linux and macOS.
+To publish a release, see [RELEASING.md](RELEASING.md).

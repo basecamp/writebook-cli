@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.2.0 to publish a GitHub release with the binaries.
+# scripts/release.sh pushes a tag like v0.2.0 or v0.2.0-rc.1, and this
+# publishes a GitHub release with the binaries. See RELEASING.md.
 
 on:
   push:
@@ -15,7 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: The tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - name: The tag matches the version in Cargo.toml
         env:
           TAG: ${{ github.ref_name }}
@@ -26,8 +30,11 @@ jobs:
             exit 1
           fi
 
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build:
-    needs: version
+    needs: [version, test]
     uses: ./.github/workflows/build.yml
 
   release:
@@ -35,13 +42,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
+      # mise checks this, and refuses a version without it once an earlier
+      # version had it. Attesting before publishing means a failure here
+      # publishes nothing.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            gh release create "$TAG" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --prerelease --latest=false
+          else
+            # Notes cover everything since the previous published stable
+            # release, release candidates included. A tag whose release failed
+            # isn't a baseline.
+            previous=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
+            gh release create "$TAG" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes ${previous:+--notes-start-tag "$previous"}
+          fi

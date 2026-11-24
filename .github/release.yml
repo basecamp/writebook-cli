@@ -1,0 +1,6 @@
+# GitHub's generated release notes leave out the PR that scripts/release.sh
+# opens to set the version.
+changelog:
+  exclude:
+    labels:
+      - release
