@@ -35,10 +35,13 @@ case "${2:-}" in
   *) die "Unknown argument: '$2' (expected --dry-run)" ;;
 esac
 
-# Leading zeros are refused: semver forbids them, and bash arithmetic would
-# read 08 as octal in the version comparison below.
-if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[a-zA-Z0-9.]+)?$ ]]; then
-  die "Invalid version '${VERSION}' (expected X.Y.Z or X.Y.Z-suffix without leading zeros, optionally v-prefixed)"
+# SemVer: no leading zeros in numbers (bash arithmetic would also read 08 as
+# octal in the version comparison below), and a prerelease suffix of
+# dot-separated identifiers made of letters, digits and hyphens.
+NUMBER='(0|[1-9][0-9]*)'
+IDENTIFIER='(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)'
+if [[ ! "$VERSION" =~ ^${NUMBER}\.${NUMBER}\.${NUMBER}(-${IDENTIFIER}(\.${IDENTIFIER})*)?$ ]]; then
+  die "Invalid version '${VERSION}' (expected SemVer like 0.2.0 or 0.2.0-rc.1, optionally v-prefixed)"
 fi
 
 TAG="v${VERSION}"
@@ -111,9 +114,15 @@ version_lt() {
   return 1
 }
 
-if [[ "$PRERELEASE" -eq 0 ]]; then
-  LATEST_STABLE=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | awk '!/-/ { print; exit }')
-  if [[ -n "$LATEST_STABLE" && "$LATEST_STABLE" != "$TAG" ]] && version_lt "$TAG" "$LATEST_STABLE"; then
+# A prerelease comes before its version, so 0.2.0-rc.1 must be newer than
+# 0.1.x but is older than 0.2.0.
+LATEST_STABLE=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | awk '!/-/ { print; exit }')
+if [[ -n "$LATEST_STABLE" && "$LATEST_STABLE" != "$TAG" ]]; then
+  if [[ "$PRERELEASE" -eq 1 ]]; then
+    if ! version_lt "$LATEST_STABLE" "${VERSION%%-*}"; then
+      die "Version $VERSION is older than the latest release ${LATEST_STABLE#v}."
+    fi
+  elif version_lt "$TAG" "$LATEST_STABLE"; then
     die "Version $VERSION is older than the latest release ${LATEST_STABLE#v}."
   fi
 fi
@@ -144,14 +153,17 @@ open_release_pr() {
     return
   fi
 
-  # A branch on origin with no open PR is someone's earlier attempt. Pushing
-  # over it could throw away their work.
+  # A release branch here or on origin with no open PR is an earlier attempt.
+  # Resetting or pushing over it could throw away work.
+  if git rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
+    die "$branch already exists locally. Delete it (git branch -D $branch) and run this again."
+  fi
   if [[ -n "$(git ls-remote --heads origin "$branch")" ]]; then
     die "origin already has $branch but no open PR from it. Open a PR from it, or delete it (git push origin --delete $branch) and run this again."
   fi
 
   info "Setting the version to $VERSION on $branch"
-  git switch --quiet -C "$branch"
+  git switch --quiet -c "$branch"
   perl -0pi -e "s/^version = \".*\"/version = \"${VERSION}\"/m" Cargo.toml
   cargo update --workspace --offline --quiet
   git add Cargo.toml Cargo.lock

@@ -78,7 +78,9 @@ jobs:
           if [[ "$TAG" == *-* ]]; then
             gh release create "$TAG" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --prerelease --latest=false
           else
-            # Notes cover everything since the previous stable release, release candidates included.
-            previous=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | grep -v -- - | grep -vx "$TAG" | head -1 || true)
+            # Notes cover everything since the previous published stable
+            # release, release candidates included. A tag whose release failed
+            # isn't a baseline.
+            previous=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
             gh release create "$TAG" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes ${previous:+--notes-start-tag "$previous"}
           fi
