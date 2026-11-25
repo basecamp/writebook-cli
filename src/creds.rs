@@ -173,14 +173,16 @@ pub fn signed_in(host: &str, profile: &str) -> Result<bool> {
 /// Sign out of a site as this profile, and tell the site to stop honoring
 /// the sign-in, so a copy of it left anywhere is no use.
 pub fn forget(host: &str, profile: &str) -> Result<()> {
-    if let Some(credentials) = storage::load(host, profile)? {
-        if let Err(error) = revoke(host, &credentials) {
-            eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#}); it was removed here anyway");
+    storage::locked(|| {
+        if let Some(credentials) = storage::load(host, profile)? {
+            if let Err(error) = revoke(host, &credentials) {
+                eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#}); it was removed here anyway");
+            }
         }
-    }
 
-    sign_in::forget_pending(host)?;
-    storage::delete(host, profile)
+        sign_in::forget_pending(host)?;
+        storage::delete(host, profile)
+    })
 }
 
 fn revoke(host: &str, credentials: &Credentials) -> Result<()> {
@@ -215,42 +217,30 @@ fn login(host: &str, profile: &str) -> Result<Credentials> {
 /// once, so two commands refreshing at the same time would sign each other
 /// out: the lock lets one go first, and the other then finds its work done.
 fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials> {
-    let lock = lock_file()?;
-    lock.lock().context("could not lock the sign-ins")?;
-
-    if let Some(current) = storage::load(host, profile)? {
-        if current.refresh_token != stale.refresh_token && !expired(&current) {
-            return Ok(current);
+    storage::locked(|| {
+        if let Some(current) = storage::load(host, profile)? {
+            if current.refresh_token != stale.refresh_token && !expired(&current) {
+                return Ok(current);
+            }
         }
-    }
 
-    let (status, body) = post_token_request(
-        host,
-        &[
-            ("client_id", CLIENT_ID),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", &stale.refresh_token),
-        ],
-    )?;
+        let (status, body) = post_token_request(
+            host,
+            &[
+                ("client_id", CLIENT_ID),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", &stale.refresh_token),
+            ],
+        )?;
 
-    if status != 200 {
-        bail!("token refresh failed: {}", error_description(&body));
-    }
+        if status != 200 {
+            bail!("token refresh failed: {}", error_description(&body));
+        }
 
-    let credentials = credentials_from(&body)?;
-    storage::save(host, profile, &credentials)?;
-    Ok(credentials)
-}
-
-fn lock_file() -> Result<std::fs::File> {
-    let path = config_dir()?.join("sign-ins.lock");
-
-    std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("could not open {}", path.display()))
+        let credentials = credentials_from(&body)?;
+        storage::save(host, profile, &credentials)?;
+        Ok(credentials)
+    })
 }
 
 fn request_device_authorization(host: &str) -> Result<Value> {
