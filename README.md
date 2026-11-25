@@ -90,6 +90,12 @@ instance using their own logins:
 writebook mcp --instance https://books.example.com --serve 127.0.0.1:8080
 ```
 
+Or run it with Docker:
+
+```sh
+docker run -p 8080:8080 ghcr.io/basecamp/writebook-cli mcp --instance https://books.example.com --serve 0.0.0.0:8080
+```
+
 Run `writebook --help` for every command.
 
 ## Development
