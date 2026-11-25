@@ -14,12 +14,63 @@ use super::edit::{self, EditPage};
 use super::help::Binding;
 use super::instances::{self, InstancePicker};
 use super::profile::{self, ProfilePage};
-use super::reader;
+use super::publishing::Publishing;
+use super::reader::{self, LeafPage};
+use super::search::Search;
 use super::settings::{self, SettingsPage};
 use super::views::{self, View};
-use super::{App, Loading, Overlay, Purpose, Screen, files};
+use super::{App, Id, Loading, Overlay, Purpose, Screen, files};
+
+/// A screen or an overlay that a reply is for.
+pub enum Target<'a> {
+    Books(&'a mut Books),
+    Book(&'a mut BookPage),
+    Edit(&'a mut EditPage),
+    Leaf(&'a mut LeafPage),
+    Settings(&'a mut SettingsPage),
+    Profile(&'a mut ProfilePage),
+    Publishing(&'a mut Publishing),
+    Search(&'a mut Search),
+}
 
 impl Screen {
+    /// The screen with this id: this one, or one set aside under it.
+    pub fn find(&mut self, id: Id) -> Option<Target<'_>> {
+        match self {
+            Screen::Instances(_) => None,
+            Screen::Books(books) => find_books(books, id),
+            Screen::Book(page) => find_book(page, id),
+            Screen::Edit(page, back) => {
+                if page.id == id {
+                    Some(Target::Edit(page))
+                } else {
+                    back.find(id)
+                }
+            }
+            Screen::Leaf(page, book) => {
+                if page.id == id {
+                    Some(Target::Leaf(page))
+                } else {
+                    find_book(book, id)
+                }
+            }
+            Screen::Settings(page, books) => {
+                if page.id == id {
+                    Some(Target::Settings(page))
+                } else {
+                    find_books(books, id)
+                }
+            }
+            Screen::Profile(page, back) => {
+                if page.id == id {
+                    Some(Target::Profile(page))
+                } else {
+                    back.find(id)
+                }
+            }
+        }
+    }
+
     pub fn host(&self) -> Option<&str> {
         match self {
             Screen::Instances(_) => None,
@@ -140,6 +191,7 @@ impl App {
                 reader::Action::Upload => self.overlay = Some(self.file_picker("Upload a file", files::ANY, Purpose::Upload)),
                 reader::Action::Overlay(overlay) => self.overlay = Some(overlay),
                 reader::Action::Request(request) => self.spawn(request),
+                reader::Action::Notice(notice) => self.notice = Some(notice.to_string()),
             },
             Screen::Settings(page, _) => match page.key(key) {
                 settings::Action::Nothing => {}
@@ -313,11 +365,9 @@ impl App {
         }
     }
 
-    pub fn books_loaded(&mut self, host: String, books: Result<Vec<BookCard>>) {
-        if let Screen::Books(screen) = &mut self.screen
-            && screen.host == host
-        {
-            screen.books = Loading::from(books);
+    pub fn books_loaded(&mut self, id: Id, books: Result<Vec<BookCard>>) {
+        if let Some(Target::Books(screen)) = self.screen.find(id) {
+            screen.loaded(books);
 
             for url in screen.covers() {
                 self.images.want(&screen.host, &url, &self.sender);
@@ -325,11 +375,8 @@ impl App {
         }
     }
 
-    pub fn book_loaded(&mut self, host: String, book_id: u64, book: Result<Book>) {
-        if let Screen::Book(screen) = &mut self.screen
-            && screen.host == host
-            && screen.book_id == book_id
-        {
+    pub fn book_loaded(&mut self, id: Id, book: Result<Book>) {
+        if let Some(Target::Book(screen)) = self.screen.find(id) {
             screen.loaded(book);
 
             for url in screen.pictures() {
@@ -338,18 +385,20 @@ impl App {
         }
     }
 
-    pub fn book_changed(&mut self, result: Result<()>) {
+    /// After a book's pages changed, load it again to show them as they are.
+    pub fn book_changed(&mut self, id: Id, result: Result<()>) {
         if let Err(error) = result {
             self.show_error(error);
         }
-        self.reload_book();
+
+        if let Some(Target::Book(screen)) = self.screen.find(id) {
+            let request = screen.load();
+            self.spawn(request);
+        }
     }
 
-    pub fn form_loaded(&mut self, host: String, book_id: Option<u64>, form: Result<BookForm>) {
-        if let Screen::Edit(page, _) = &mut self.screen
-            && page.host == host
-            && page.book_id == book_id
-        {
+    pub fn form_loaded(&mut self, id: Id, form: Result<BookForm>) {
+        if let Some(Target::Edit(page)) = self.screen.find(id) {
             page.form = Loading::from(form);
 
             if let Some(cover) = page.form.ready().and_then(|it| it.cover.clone()) {
@@ -358,42 +407,45 @@ impl App {
         }
     }
 
-    pub fn saved(&mut self, result: Result<u64>) {
-        if let Screen::Edit(page, _) = &mut self.screen {
+    /// After saving a book, back to it, or on to the new book. The editor is
+    /// always the screen on top while it's open.
+    pub fn saved(&mut self, id: Id, result: Result<u64>) {
+        if let Some(Target::Edit(page)) = self.screen.find(id) {
             page.saving = false;
+            let new_book = page.book_id.is_none();
 
             match result {
-                Ok(book_id) if page.book_id.is_none() => {
+                Ok(book_id) if new_book => {
                     self.close_editor(true);
                     self.open_book(book_id);
                 }
                 Ok(_) => self.close_editor(true),
                 Err(error) => self.show_error(error),
             }
+        } else if let Err(error) = result {
+            self.show_error(error);
         }
     }
 
     /// After a book is deleted, back to the books it was among.
-    pub fn book_deleted(&mut self, result: Result<()>) {
-        match result {
-            Ok(()) => {
-                self.close_editor(false);
-                self.close_book();
-            }
-            Err(error) => {
-                if let Screen::Edit(page, _) = &mut self.screen {
-                    page.saving = false;
+    pub fn book_deleted(&mut self, id: Id, result: Result<()>) {
+        if let Some(Target::Edit(page)) = self.screen.find(id) {
+            page.saving = false;
+
+            match result {
+                Ok(()) => {
+                    self.close_editor(false);
+                    self.close_book();
                 }
-                self.show_error(error);
+                Err(error) => self.show_error(error),
             }
+        } else if let Err(error) = result {
+            self.show_error(error);
         }
     }
 
-    pub fn leaf_loaded(&mut self, book_id: u64, leaf_id: u64, content: Result<LeafContent>) {
-        if let Screen::Leaf(page, _) = &mut self.screen
-            && page.book_id == book_id
-            && page.leaf().id == leaf_id
-        {
+    pub fn leaf_loaded(&mut self, id: Id, content: Result<LeafContent>) {
+        if let Some(Target::Leaf(page)) = self.screen.find(id) {
             page.loaded(content);
 
             for url in page.images() {
@@ -403,8 +455,8 @@ impl App {
     }
 
     /// After saving, show the page as saved.
-    pub fn leaf_saved(&mut self, result: Result<String>) {
-        if let Screen::Leaf(page, _) = &mut self.screen {
+    pub fn leaf_saved(&mut self, id: Id, result: Result<String>) {
+        if let Some(Target::Leaf(page)) = self.screen.find(id) {
             page.saving = false;
 
             match result {
@@ -417,49 +469,50 @@ impl App {
                 }
                 Err(error) => self.show_error(error),
             }
+        } else if let Err(error) = result {
+            self.show_error(error);
         }
     }
 
     /// Put an uploaded file into the editor of the page it was uploaded for,
     /// if that's still open.
-    pub fn uploaded(&mut self, host: String, book_id: u64, leaf_id: u64, result: Result<String>) {
+    pub fn uploaded(&mut self, id: Id, result: Result<String>) {
+        let editor = match self.screen.find(id) {
+            Some(Target::Leaf(page)) => page.upload_finished(),
+            _ => None,
+        };
+
         match result {
-            Ok(markdown) => {
-                if let Screen::Leaf(page, _) = &mut self.screen
-                    && page.host == host
-                    && page.book_id == book_id
-                    && page.leaf().id == leaf_id
-                    && let Some(editor) = &mut page.editor
-                {
-                    editor.insert_block(&markdown);
-                } else {
-                    self.notice = Some("Uploaded, but the page it was for isn't being edited any more.".to_string());
-                }
-            }
+            Ok(markdown) => match editor {
+                Some(editor) => editor.insert_block(&markdown),
+                None => self.notice = Some("Uploaded, but the page it was for isn't being edited any more.".to_string()),
+            },
             Err(error) => self.show_error(error),
         }
     }
 
-    pub fn people_loaded(&mut self, host: String, people: Result<People>) {
-        if let Screen::Settings(page, _) = &mut self.screen
-            && page.host == host
-        {
+    pub fn people_loaded(&mut self, id: Id, people: Result<People>) {
+        if let Some(Target::Settings(page)) = self.screen.find(id) {
             page.loaded(people);
         }
     }
 
-    pub fn people_changed(&mut self, result: Result<()>) {
+    pub fn people_changed(&mut self, id: Id, result: Result<()>) {
         if let Err(error) = result {
             self.show_error(error);
         }
-        self.load_people();
+
+        if let Some(Target::Settings(page)) = self.screen.find(id) {
+            let request = page.load();
+            self.spawn(request);
+        }
     }
 
-    pub fn invite_reset(&mut self, result: Result<String>) {
+    pub fn invite_reset(&mut self, id: Id, reset: u64, result: Result<String>) {
         match result {
             Ok(url) => {
-                if let Screen::Settings(page, _) = &mut self.screen {
-                    page.invite_reset(url);
+                if let Some(Target::Settings(page)) = self.screen.find(id) {
+                    page.invite_reset(reset, url);
                 }
                 self.notice = Some("The old invite link no longer works.".to_string());
             }
@@ -467,16 +520,14 @@ impl App {
         }
     }
 
-    pub fn profile_loaded(&mut self, host: String, profile: Result<Profile>) {
-        if let Screen::Profile(page, _) = &mut self.screen
-            && page.host == host
-        {
+    pub fn profile_loaded(&mut self, id: Id, profile: Result<Profile>) {
+        if let Some(Target::Profile(page)) = self.screen.find(id) {
             page.loaded(profile);
         }
     }
 
-    pub fn profile_saved(&mut self, result: Result<()>) {
-        if let Screen::Profile(page, _) = &mut self.screen {
+    pub fn profile_saved(&mut self, id: Id, result: Result<()>) {
+        if let Some(Target::Profile(page)) = self.screen.find(id) {
             page.saving = false;
 
             match result {
@@ -486,6 +537,16 @@ impl App {
                 }
                 Err(error) => self.show_error(error),
             }
+        } else if let Err(error) = result {
+            self.show_error(error);
         }
     }
+}
+
+fn find_books(books: &mut Books, id: Id) -> Option<Target<'_>> {
+    if books.id == id { Some(Target::Books(books)) } else { None }
+}
+
+fn find_book(page: &mut BookPage, id: Id) -> Option<Target<'_>> {
+    if page.id == id { Some(Target::Book(page)) } else { find_books(&mut page.books, id) }
 }

@@ -7,13 +7,26 @@ use ratatui::layout::Rect;
 use std::path::PathBuf;
 
 use super::add::{self, Add};
-use super::confirm::Question;
+use super::confirm::{Confirm, Question};
 use super::data::{self, Found, Publication};
 use super::files::{self, FilePicker, Picked};
 use super::help::Binding;
-use super::{App, Message, Overlay, Purpose, Screen, instances, publishing, reader, search};
+use super::screens::Target;
+use super::search::Search;
+use super::{App, Id, Message, Overlay, Purpose, Reply, Screen, instances, publishing, reader, search};
 
 impl Overlay {
+    /// The overlay with this id: this one, or the one the quit question is
+    /// asked over.
+    pub fn find(&mut self, id: Id) -> Option<Target<'_>> {
+        match self {
+            Overlay::Publishing(publishing) if publishing.id == id => Some(Target::Publishing(publishing)),
+            Overlay::Search(search) if search.id == id => Some(Target::Search(search)),
+            Overlay::Confirm(Confirm { question: Question::Quit(Some(previous)), .. }) => previous.find(id),
+            _ => None,
+        }
+    }
+
     /// Whether keys go into a text field, where ? is just a character.
     pub fn typing(&self) -> bool {
         match self {
@@ -102,7 +115,7 @@ impl App {
                 search::Action::Nothing => Some(Overlay::Search(search)),
                 search::Action::Close => None,
                 search::Action::Search(query) => {
-                    self.search(search.book_id, query);
+                    self.search(&search, query);
                     Some(Overlay::Search(search))
                 }
                 search::Action::Open(found) => {
@@ -178,7 +191,7 @@ impl App {
     }
 
     fn upload(&mut self, path: PathBuf) {
-        if let Screen::Leaf(page, _) = &self.screen {
+        if let Screen::Leaf(page, _) = &mut self.screen {
             let uploading = format!("Uploading {}…", path.display());
 
             match page.upload(path) {
@@ -191,12 +204,15 @@ impl App {
         }
     }
 
-    fn search(&self, book_id: Option<u64>, query: String) {
+    fn search(&self, search: &Search, query: String) {
         if let Some(host) = self.screen.host() {
+            let id = search.id;
+            let book_id = search.book_id;
             let host = host.to_string();
+
             self.spawn(move || {
                 let found = data::search(&host, book_id, &query);
-                Message::Found(host, book_id, query, found)
+                Message::To(id, Reply::Found(query, found))
             });
         }
     }
@@ -254,8 +270,9 @@ impl App {
                 }
             }
             Question::ResetInvite => {
-                if let Screen::Settings(page, _) = &self.screen {
-                    self.spawn(page.reset_invite());
+                if let Screen::Settings(page, _) = &mut self.screen {
+                    let request = page.reset_invite();
+                    self.spawn(request);
                 }
             }
             Question::Quit(_) => self.done = true,
@@ -268,14 +285,14 @@ impl App {
         Overlay::Files(Box::new(picker), purpose)
     }
 
-    pub fn published(&mut self, result: Result<Publication>) {
-        if let Some(Overlay::Publishing(publishing)) = &mut self.overlay {
+    pub fn published(&mut self, id: Id, book_page: Id, result: Result<Publication>) {
+        if let Some(Target::Publishing(publishing)) = self.overlay.as_mut().and_then(|it| it.find(id)) {
             publishing.finished(&result);
         }
 
         match result {
             Ok(publication) => {
-                if let Screen::Book(screen) = &mut self.screen {
+                if let Some(Target::Book(screen)) = self.screen.find(book_page) {
                     screen.published(publication);
                 }
             }
@@ -283,11 +300,9 @@ impl App {
         }
     }
 
-    pub fn found(&mut self, host: String, book_id: Option<u64>, query: String, found: Result<Vec<Found>>) {
-        if let Some(Overlay::Search(search)) = &mut self.overlay
-            && self.screen.host() == Some(host.as_str())
-        {
-            search.arrived(book_id, &query, found);
+    pub fn found(&mut self, id: Id, query: String, found: Result<Vec<Found>>) {
+        if let Some(Target::Search(search)) = self.overlay.as_mut().and_then(|it| it.find(id)) {
+            search.arrived(&query, found);
         }
     }
 }

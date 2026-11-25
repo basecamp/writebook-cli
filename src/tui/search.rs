@@ -8,13 +8,14 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
-use super::{Loading, views};
+use super::{Id, Loading, next_id, views};
 use super::data::Found;
 use super::help::Binding;
 use crate::web;
 
 
 pub struct Search {
+    pub id: Id,
     /// The book being searched, or none for every book.
     pub book_id: Option<u64>,
     scope: String,
@@ -34,7 +35,7 @@ pub enum Action {
 
 impl Search {
     pub fn new(book_id: Option<u64>, scope: String) -> Search {
-        Search { book_id, scope, query: String::new(), searched: None, results: None, selected: 0, offset: 0 }
+        Search { id: next_id(), book_id, scope, query: String::new(), searched: None, results: None, selected: 0, offset: 0 }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
@@ -77,10 +78,10 @@ impl Search {
         }
     }
 
-    /// Show what a search found, unless it was for another book or for words
-    /// searched before the last ones.
-    pub fn arrived(&mut self, book_id: Option<u64>, query: &str, found: anyhow::Result<Vec<Found>>) {
-        if self.book_id == book_id && self.searched.as_deref() == Some(query) {
+    /// Show what a search found, unless it was for words searched before the
+    /// last ones.
+    pub fn arrived(&mut self, query: &str, found: anyhow::Result<Vec<Found>>) {
+        if self.searched.as_deref() == Some(query) {
             self.results = Some(Loading::from(found));
             let count = self.found().map(<[Found]>::len).unwrap_or(0);
             self.selected = self.selected.min(count.saturating_sub(1));
@@ -221,7 +222,7 @@ mod tests {
         }
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbit"));
 
-        search.arrived(Some(2), "rabbit", Ok(vec![found("Introduction"), found("Getting Around")]));
+        search.arrived("rabbit", Ok(vec![found("Introduction"), found("Getting Around")]));
         search.key(press(KeyCode::Down));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Open(found) if found.title == "Getting Around"));
 
@@ -235,17 +236,16 @@ mod tests {
         let mut search = Search::new(Some(2), "The Trail Guide".to_string());
         search.query = "rabbit".to_string();
         search.key(press(KeyCode::Enter));
-        search.arrived(Some(2), "rabbit", Ok(vec![found("Introduction"), found("Getting Around"), found("Maps")]));
+        search.arrived("rabbit", Ok(vec![found("Introduction"), found("Getting Around"), found("Maps")]));
         search.key(press(KeyCode::Down));
         search.key(press(KeyCode::Down));
 
         search.query = "hole".to_string();
         search.key(press(KeyCode::Enter));
-        search.arrived(Some(2), "rabbit", Ok(vec![found("Introduction")]));
-        search.arrived(None, "hole", Ok(vec![found("Introduction")]));
+        search.arrived("rabbit", Ok(vec![found("Introduction")]));
         assert!(matches!(search.results, Some(Loading::Pending)));
 
-        search.arrived(Some(2), "hole", Ok(vec![found("Down the hole")]));
+        search.arrived("hole", Ok(vec![found("Down the hole")]));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Open(found) if found.title == "Down the hole"));
     }
 
@@ -256,7 +256,7 @@ mod tests {
         search.key(press(KeyCode::Enter));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Nothing), "still searching");
 
-        search.arrived(None, "rabbit", Err(anyhow::anyhow!("offline")));
+        search.arrived("rabbit", Err(anyhow::anyhow!("offline")));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbit"));
     }
 }

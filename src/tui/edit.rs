@@ -11,11 +11,12 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Wrap};
 
 use super::data::{self, BookForm, Role};
 use super::images::{Images, Source};
-use super::{Loading, Message, Request, theme, views};
+use super::{Id, Loading, Message, Reply, Request, next_id, theme, views};
 
 const THEMES: [&str; 7] = ["black", "blue", "green", "magenta", "orange", "violet", "white"];
 
 pub struct EditPage {
+    pub id: Id,
     pub host: String,
     pub book_id: Option<u64>,
     pub name: String,
@@ -50,17 +51,14 @@ pub enum Action {
 
 impl EditPage {
     pub fn new(host: String, name: String, book_id: Option<u64>) -> EditPage {
-        EditPage { host, book_id, name, form: Loading::Pending, focus: 1, saving: false }
+        EditPage { id: next_id(), host, book_id, name, form: Loading::Pending, focus: 1, saving: false }
     }
 
     pub fn load(&self) -> Request {
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
-
-        Box::new(move || {
-            let form = data::book_form(&host, book_id);
-            Message::Form(host, book_id, form)
-        })
+        Box::new(move || Message::To(id, Reply::Form(data::book_form(&host, book_id))))
     }
 
     /// Why the book can't be saved as it is.
@@ -73,17 +71,19 @@ impl EditPage {
 
     pub fn save(&mut self) -> Option<Request> {
         let form = self.form.ready().cloned()?;
+        let id = self.id;
         let host = self.host.clone();
         self.saving = true;
 
-        Some(Box::new(move || Message::Saved(data::save_book(&host, &form))))
+        Some(Box::new(move || Message::To(id, Reply::Saved(data::save_book(&host, &form)))))
     }
 
     pub fn delete(&mut self, book_id: u64) -> Request {
+        let id = self.id;
         let host = self.host.clone();
         self.saving = true;
 
-        Box::new(move || Message::BookDeleted(data::delete_book(&host, book_id)))
+        Box::new(move || Message::To(id, Reply::BookDeleted(data::delete_book(&host, book_id))))
     }
 
     /// The keys for the focused field.

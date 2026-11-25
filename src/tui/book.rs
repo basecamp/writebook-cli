@@ -18,12 +18,13 @@ use super::publishing::Publishing;
 use super::reader::LeafPage;
 use super::search::Search;
 use super::views::{self, Row, View};
-use super::{Loading, Message, Overlay, Request, theme};
+use super::{Id, Loading, Message, Overlay, Reply, Request, next_id, theme};
 
 const TILE_WIDTH: u16 = 24;
 const TILE_HEIGHT: u16 = 14;
 
 pub struct BookPage {
+    pub id: Id,
     pub host: String,
     pub book_id: u64,
     pub book: Loading<Book>,
@@ -51,6 +52,7 @@ pub enum Action {
 impl BookPage {
     pub fn new(books: Books, book_id: u64) -> BookPage {
         BookPage {
+            id: next_id(),
             host: books.host.clone(),
             book_id,
             book: Loading::Pending,
@@ -64,13 +66,10 @@ impl BookPage {
     }
 
     pub fn load(&self) -> Request {
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
-
-        Box::new(move || {
-            let book = data::book(&host, book_id);
-            Message::Book(host, book_id, book)
-        })
+        Box::new(move || Message::To(id, Reply::Book(data::book(&host, book_id))))
     }
 
     pub fn loaded(&mut self, book: Result<Book>) {
@@ -120,17 +119,19 @@ impl BookPage {
     }
 
     pub fn add(&self, leaf: NewLeaf) -> Request {
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
 
-        Box::new(move || Message::Changed(data::add(&host, book_id, &leaf)))
+        Box::new(move || Message::To(id, Reply::Changed(data::add(&host, book_id, &leaf))))
     }
 
     pub fn delete(&self, leaf: Leaf) -> Request {
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
 
-        Box::new(move || Message::Changed(data::delete(&host, book_id, &leaf)))
+        Box::new(move || Message::To(id, Reply::Changed(data::delete(&host, book_id, &leaf))))
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
@@ -158,6 +159,7 @@ impl BookPage {
 
     fn arrange(&mut self, order: Vec<Leaf>) -> Action {
         let ids: Vec<u64> = order.iter().map(|it| it.id).collect();
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
 
@@ -165,7 +167,7 @@ impl BookPage {
             book.leaves = order;
         }
 
-        Action::Request(Box::new(move || Message::Changed(data::arrange(&host, book_id, &ids))))
+        Action::Request(Box::new(move || Message::To(id, Reply::Changed(data::arrange(&host, book_id, &ids)))))
     }
 
     fn browse_key(&mut self, key: KeyEvent) -> Action {
@@ -190,7 +192,7 @@ impl BookPage {
                 Action::Nothing
             }
             KeyCode::Char('p') if editable => match self.book.ready() {
-                Some(book) => Action::Overlay(Overlay::Publishing(Publishing::new(&self.host, self.book_id, book))),
+                Some(book) => Action::Overlay(Overlay::Publishing(Publishing::new(&self.host, self.id, book))),
                 None => Action::Nothing,
             },
             KeyCode::Char('e') if editable => Action::EditBook(self.book_id),

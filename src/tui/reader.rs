@@ -15,9 +15,12 @@ use super::editor::{self, Editor};
 use super::help::Binding;
 use super::images::{Images, Source};
 use super::markdown::{self, Row};
-use super::{Loading, Message, Overlay, Request, views};
+use super::{Id, Loading, Message, Overlay, Reply, Request, next_id, views};
 
 pub struct LeafPage {
+    /// A new one for each page turned to, so a reply for the page before
+    /// isn't taken for this one.
+    pub id: Id,
     pub host: String,
     pub book_id: u64,
     pub book_title: String,
@@ -30,6 +33,8 @@ pub struct LeafPage {
     pub scroll: usize,
     pub editor: Option<Editor>,
     pub saving: bool,
+    /// How many files are still uploading into the page.
+    uploads: usize,
 }
 
 struct Rendered {
@@ -46,6 +51,7 @@ pub enum Action {
     Upload,
     Overlay(Overlay),
     Request(Request),
+    Notice(&'static str),
 }
 
 /// The book's pages, to jump to one.
@@ -64,6 +70,7 @@ pub enum IndexAction {
 impl LeafPage {
     pub fn new(host: String, book_id: u64, book: &Book, index: usize) -> LeafPage {
         LeafPage {
+            id: next_id(),
             host,
             book_id,
             book_title: book.title.clone(),
@@ -75,18 +82,16 @@ impl LeafPage {
             scroll: 0,
             editor: None,
             saving: false,
+            uploads: 0,
         }
     }
 
     pub fn load(&self) -> Request {
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
         let leaf = self.leaf().clone();
-
-        Box::new(move || {
-            let content = data::leaf(&host, book_id, &leaf);
-            Message::LeafLoaded(book_id, leaf.id, content)
-        })
+        Box::new(move || Message::To(id, Reply::LeafLoaded(data::leaf(&host, book_id, &leaf))))
     }
 
     pub fn loaded(&mut self, content: anyhow::Result<LeafContent>) {
@@ -123,17 +128,23 @@ impl LeafPage {
         }
     }
 
+    /// Save the page, once every file uploading into it is in.
     fn save(&mut self) -> Action {
+        if self.uploads > 0 {
+            return Action::Notice("Wait for the upload to finish, then save.");
+        }
+
         let (Some(editor), Loading::Ready(content)) = (&self.editor, &self.content) else { return Action::Nothing };
         let title = editor.title.clone();
         let body = editor.body();
         let fingerprint = content.fingerprint.clone();
+        let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
         let leaf = self.leaf().clone();
         self.saving = true;
 
-        Action::Request(Box::new(move || Message::LeafSaved(data::save_leaf(&host, book_id, &leaf, &title, &body, &fingerprint))))
+        Action::Request(Box::new(move || Message::To(id, Reply::LeafSaved(data::save_leaf(&host, book_id, &leaf, &title, &body, &fingerprint)))))
     }
 
     fn read_key(&mut self, key: KeyEvent) -> Action {
@@ -161,6 +172,8 @@ impl LeafPage {
 
     /// Turn to another page. Returns the request that loads it.
     fn turn_to(&mut self, index: usize) -> Request {
+        self.id = next_id();
+        self.uploads = 0;
         self.index = index;
         self.content = Loading::Pending;
         self.rendered = None;
@@ -186,16 +199,20 @@ impl LeafPage {
 
     /// Uploading a file into the page, which only a page, not a section or
     /// picture, can take.
-    pub fn upload(&self, path: std::path::PathBuf) -> Option<Request> {
+    pub fn upload(&mut self, path: std::path::PathBuf) -> Option<Request> {
         let record_gid = self.content.ready().and_then(|it| it.record_gid.clone())?;
+        let id = self.id;
         let host = self.host.clone();
-        let book_id = self.book_id;
-        let leaf_id = self.leaf().id;
+        self.uploads += 1;
 
-        Some(Box::new(move || {
-            let markdown = data::upload(&host, &record_gid, &path);
-            Message::Uploaded(host, book_id, leaf_id, markdown)
-        }))
+        Some(Box::new(move || Message::To(id, Reply::Uploaded(data::upload(&host, &record_gid, &path)))))
+    }
+
+    /// An upload is done. Returns the editor its Markdown goes into, if the
+    /// page is still being edited.
+    pub fn upload_finished(&mut self) -> Option<&mut Editor> {
+        self.uploads -= 1;
+        self.editor.as_mut()
     }
 
     /// The images a page shows, to fetch.

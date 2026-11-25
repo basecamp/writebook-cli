@@ -10,11 +10,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use super::data::{self, People, Person};
-use super::{Loading, Message, Request, views};
+use super::{Id, Loading, Message, Reply, Request, next_id, views};
 
 pub struct SettingsPage {
+    pub id: Id,
     pub host: String,
     pub people: Loading<People>,
+    /// How many times the invite link was reset, so only the last reset's
+    /// link is shown.
+    resets: u64,
     selected: usize,
     offset: usize,
     qr: bool,
@@ -32,16 +36,13 @@ pub enum Action {
 
 impl SettingsPage {
     pub fn new(host: String) -> SettingsPage {
-        SettingsPage { host, people: Loading::Pending, selected: 0, offset: 0, qr: false }
+        SettingsPage { id: next_id(), host, people: Loading::Pending, resets: 0, selected: 0, offset: 0, qr: false }
     }
 
     pub fn load(&self) -> Request {
+        let id = self.id;
         let host = self.host.clone();
-
-        Box::new(move || {
-            let people = data::people(&host);
-            Message::People(host, people)
-        })
+        Box::new(move || Message::To(id, Reply::People(data::people(&host))))
     }
 
     /// The people as loaded, the selection kept on one of them.
@@ -52,22 +53,30 @@ impl SettingsPage {
     }
 
     pub fn set_role(&self, person_id: u64, administrator: bool) -> Request {
+        let id = self.id;
         let host = self.host.clone();
-        Box::new(move || Message::PeopleChanged(data::set_role(&host, person_id, administrator)))
+        Box::new(move || Message::To(id, Reply::PeopleChanged(data::set_role(&host, person_id, administrator))))
     }
 
     pub fn remove(&self, person_id: u64) -> Request {
+        let id = self.id;
         let host = self.host.clone();
-        Box::new(move || Message::PeopleChanged(data::remove_person(&host, person_id)))
+        Box::new(move || Message::To(id, Reply::PeopleChanged(data::remove_person(&host, person_id))))
     }
 
-    pub fn reset_invite(&self) -> Request {
+    pub fn reset_invite(&mut self) -> Request {
+        self.resets += 1;
+        let reset = self.resets;
+        let id = self.id;
         let host = self.host.clone();
-        Box::new(move || Message::InviteReset(data::reset_invite(&host)))
+        Box::new(move || Message::To(id, Reply::InviteReset(reset, data::reset_invite(&host))))
     }
 
-    pub fn invite_reset(&mut self, url: String) {
-        if let Loading::Ready(people) = &mut self.people {
+    /// Show the link from a reset, unless another reset was asked for since.
+    pub fn invite_reset(&mut self, reset: u64, url: String) {
+        if reset == self.resets
+            && let Loading::Ready(people) = &mut self.people
+        {
             people.join_url = Some(url);
         }
     }

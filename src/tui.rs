@@ -34,6 +34,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::widgets::Paragraph;
 use ratatui::{DefaultTerminal, Frame};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
@@ -109,26 +110,42 @@ fn leave(enhanced: bool) {
 
 pub enum Message {
     Instances(Result<Vec<Instance>>),
-    Books(String, Result<Vec<BookCard>>),
-    Book(String, u64, Result<data::Book>),
     Image(images::Source, Result<image::DynamicImage>),
+    /// A reply for the screen or overlay with this id, wherever it is by now.
+    To(Id, Reply),
+}
+
+/// What a request for a screen or an overlay brought back.
+pub enum Reply {
+    Books(Result<Vec<BookCard>>),
+    Book(Result<data::Book>),
     Changed(Result<()>),
-    Published(Result<Publication>),
-    /// The form for the book with this id on this host, or for a new book.
-    Form(String, Option<u64>, Result<BookForm>),
+    /// For the publishing overlay, and the book page with this id under it.
+    Published(Id, Result<Publication>),
+    Form(Result<BookForm>),
     Saved(Result<u64>),
     BookDeleted(Result<()>),
-    /// What a search on a host, in a book or every book, found for a query.
-    Found(String, Option<u64>, String, Result<Vec<data::Found>>),
-    LeafLoaded(u64, u64, Result<data::LeafContent>),
+    /// What a search for a query found.
+    Found(String, Result<Vec<data::Found>>),
+    LeafLoaded(Result<data::LeafContent>),
     LeafSaved(Result<String>),
-    /// The Markdown for a file uploaded into a page on a host and book.
-    Uploaded(String, u64, u64, Result<String>),
-    People(String, Result<data::People>),
+    /// The Markdown for a file uploaded into the page.
+    Uploaded(Result<String>),
+    People(Result<data::People>),
     PeopleChanged(Result<()>),
-    InviteReset(Result<String>),
-    ProfileLoaded(String, Result<data::Profile>),
+    /// The new invite link from the reset with this number.
+    InviteReset(u64, Result<String>),
+    ProfileLoaded(Result<data::Profile>),
     ProfileSaved(Result<()>),
+}
+
+/// Which screen or overlay a reply is for. Each one gets its own when it's
+/// made, so a reply never lands on another one that took its place.
+pub type Id = u64;
+
+pub fn next_id() -> Id {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Work for a background thread, whose result comes back as a message.
@@ -366,22 +383,30 @@ impl App {
         match message {
             Message::Instances(instances) => self.instances = Loading::from(instances),
             Message::Image(source, image) => self.images.arrived(source, image),
-            Message::Books(host, books) => self.books_loaded(host, books),
-            Message::Book(host, book_id, book) => self.book_loaded(host, book_id, book),
-            Message::Changed(result) => self.book_changed(result),
-            Message::Published(result) => self.published(result),
-            Message::Form(host, book_id, form) => self.form_loaded(host, book_id, form),
-            Message::Saved(result) => self.saved(result),
-            Message::BookDeleted(result) => self.book_deleted(result),
-            Message::Found(host, book_id, query, found) => self.found(host, book_id, query, found),
-            Message::LeafLoaded(book_id, leaf_id, content) => self.leaf_loaded(book_id, leaf_id, content),
-            Message::LeafSaved(result) => self.leaf_saved(result),
-            Message::Uploaded(host, book_id, leaf_id, result) => self.uploaded(host, book_id, leaf_id, result),
-            Message::People(host, people) => self.people_loaded(host, people),
-            Message::PeopleChanged(result) => self.people_changed(result),
-            Message::InviteReset(result) => self.invite_reset(result),
-            Message::ProfileLoaded(host, profile) => self.profile_loaded(host, profile),
-            Message::ProfileSaved(result) => self.profile_saved(result),
+            Message::To(id, reply) => self.reply(id, reply),
+        }
+    }
+
+    /// Hand a reply to the screen or overlay it's for, which may be set aside
+    /// under another by now, or gone.
+    fn reply(&mut self, id: Id, reply: Reply) {
+        match reply {
+            Reply::Books(books) => self.books_loaded(id, books),
+            Reply::Book(book) => self.book_loaded(id, book),
+            Reply::Changed(result) => self.book_changed(id, result),
+            Reply::Published(book_page, result) => self.published(id, book_page, result),
+            Reply::Form(form) => self.form_loaded(id, form),
+            Reply::Saved(result) => self.saved(id, result),
+            Reply::BookDeleted(result) => self.book_deleted(id, result),
+            Reply::Found(query, found) => self.found(id, query, found),
+            Reply::LeafLoaded(content) => self.leaf_loaded(id, content),
+            Reply::LeafSaved(result) => self.leaf_saved(id, result),
+            Reply::Uploaded(result) => self.uploaded(id, result),
+            Reply::People(people) => self.people_loaded(id, people),
+            Reply::PeopleChanged(result) => self.people_changed(id, result),
+            Reply::InviteReset(reset, result) => self.invite_reset(id, reset, result),
+            Reply::ProfileLoaded(profile) => self.profile_loaded(id, profile),
+            Reply::ProfileSaved(result) => self.profile_saved(id, result),
         }
     }
 
@@ -521,7 +546,7 @@ mod tests {
             body: "# Title\n\nSome text, a list:\n\n- one\n- > two\n\n![a](/a.png)\n\n| a | b |\n|---|---|\n| 1 | 2 |".to_string(),
             image: None,
             fingerprint: "f1".to_string(),
-            record_gid: None,
+            record_gid: Some("gid://writebook/ActionText::RichText/1".to_string()),
         }));
         page
     }
@@ -539,31 +564,182 @@ mod tests {
         }
     }
 
+    fn leaf_page(app: &mut App) -> &mut LeafPage {
+        match &mut app.screen {
+            Screen::Leaf(page, _) => page,
+            _ => panic!("not on a page"),
+        }
+    }
+
+    fn publication(published: bool) -> Publication {
+        Publication { published, slug: "handbook".to_string(), url: format!("{HOST}/1/handbook") }
+    }
+
     #[test]
-    fn a_form_for_another_book_doesnt_fill_in_the_new_book() {
+    fn a_form_goes_only_into_the_editor_it_was_loaded_for() {
         let mut app = App::new(Images::none());
         let page = EditPage::new(HOST.to_string(), "books.example.com".to_string(), None);
+        let id = page.id;
         app.screen = Screen::Edit(Box::new(page), Box::new(Screen::Instances(InstancePicker::new(0))));
 
-        app.receive(Message::Form(HOST.to_string(), Some(9), Ok(form(Some(9), "Someone else's"))));
-        app.receive(Message::Form("https://other.example.com".to_string(), None, Ok(form(None, "Elsewhere"))));
+        app.receive(Message::To(next_id(), Reply::Form(Ok(form(Some(9), "Someone else's")))));
         assert!(matches!(&app.screen, Screen::Edit(page, _) if matches!(page.form, Loading::Pending)));
 
-        app.receive(Message::Form(HOST.to_string(), None, Ok(form(None, ""))));
+        app.receive(Message::To(id, Reply::Form(Ok(form(None, "")))));
         assert!(matches!(&app.screen, Screen::Edit(page, _) if page.form.ready().is_some_and(|it| it.id.is_none())));
+    }
+
+    #[test]
+    fn a_save_or_delete_finishing_leaves_another_editor_alone() {
+        let mut app = App::new(Images::none());
+        let mut page = EditPage::new(HOST.to_string(), "books.example.com".to_string(), Some(1));
+        page.form = Loading::Ready(form(Some(1), "Handbook"));
+        let id = page.id;
+        app.screen = Screen::Edit(Box::new(page), Box::new(Screen::Book(Box::new(book_page()))));
+
+        app.receive(Message::To(next_id(), Reply::Saved(Ok(7))));
+        app.receive(Message::To(next_id(), Reply::BookDeleted(Ok(()))));
+        assert!(matches!(&app.screen, Screen::Edit(page, _) if page.id == id));
+
+        let Screen::Edit(page, _) = &mut app.screen else { panic!("the editor closed") };
+        page.saving = true;
+        app.receive(Message::To(id, Reply::Saved(Err(anyhow::anyhow!("offline")))));
+        assert!(matches!(&app.screen, Screen::Edit(page, _) if !page.saving));
+        assert_eq!(app.notice.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn a_page_loads_only_into_the_page_it_was_loaded_for() {
+        let mut app = App::new(Images::none());
+        app.screen = Screen::Leaf(Box::new(reading_page(1)), Box::new(book_page()));
+        let id = leaf_page(&mut app).id;
+        let content = |body: &str| data::LeafContent { title: "Page".to_string(), body: body.to_string(), image: None, fingerprint: "f2".to_string(), record_gid: None };
+
+        app.receive(Message::To(next_id(), Reply::LeafLoaded(Ok(content("Elsewhere")))));
+        assert_eq!(leaf_page(&mut app).content.ready().unwrap().fingerprint, "f1");
+
+        app.receive(Message::To(id, Reply::LeafLoaded(Ok(content("Here")))));
+        assert_eq!(leaf_page(&mut app).content.ready().unwrap().body, "Here");
     }
 
     #[test]
     fn an_upload_goes_only_into_the_page_it_was_for() {
         let mut app = App::new(Images::none());
         app.screen = editing_page(2);
+        let id = leaf_page(&mut app).id;
+        let _request = leaf_page(&mut app).upload(PathBuf::from("b.png")).unwrap();
 
-        app.receive(Message::Uploaded(HOST.to_string(), 1, 1, Ok("![a.png](/a.png)".to_string())));
+        app.receive(Message::To(next_id(), Reply::Uploaded(Ok("![a.png](/a.png)".to_string()))));
         assert_eq!(edited_body(&app), "");
         assert!(app.notice.is_some());
 
-        app.receive(Message::Uploaded(HOST.to_string(), 1, 2, Ok("![b.png](/b.png)".to_string())));
+        app.receive(Message::To(id, Reply::Uploaded(Ok("![b.png](/b.png)".to_string()))));
         assert!(edited_body(&app).contains("![b.png](/b.png)"));
+    }
+
+    #[test]
+    fn a_page_waits_for_its_uploads_before_saving() {
+        let mut app = App::new(Images::none());
+        app.screen = editing_page(1);
+        let id = leaf_page(&mut app).id;
+        let _request = leaf_page(&mut app).upload(PathBuf::from("a.png")).unwrap();
+
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(!leaf_page(&mut app).saving);
+        assert_eq!(app.notice.as_deref(), Some("Wait for the upload to finish, then save."));
+
+        app.receive(Message::To(id, Reply::Uploaded(Ok("![a.png](/a.png)".to_string()))));
+        assert!(edited_body(&app).contains("![a.png](/a.png)"));
+    }
+
+    #[test]
+    fn books_load_while_settings_are_open_over_them() {
+        let mut app = App::new(Images::none());
+        let mut books = Books::new(HOST.to_string(), "books.example.com".to_string());
+        let id = books.id;
+        books.books = Loading::Pending;
+        app.screen = Screen::Settings(Box::new(SettingsPage::new(HOST.to_string())), books);
+
+        app.receive(Message::To(id, Reply::Books(Ok(Vec::new()))));
+        assert!(matches!(&app.screen, Screen::Settings(_, books) if matches!(books.books, Loading::Ready(_))));
+    }
+
+    #[test]
+    fn publishing_goes_only_to_the_overlay_it_was_for_even_under_the_quit_question() {
+        let mut app = App::new(Images::none());
+        let page = book_page();
+        let book_page_id = page.id;
+        app.screen = Screen::Book(Box::new(page));
+        let earlier = next_id();
+        app.overlay = Some(Overlay::Publishing(Publishing::new(HOST, book_page_id, &book())));
+
+        app.receive(Message::To(earlier, Reply::Published(next_id(), Ok(publication(true)))));
+        let Some(Overlay::Publishing(publishing)) = &mut app.overlay else { panic!("the overlay closed") };
+        assert!(matches!(publishing.key(press(KeyCode::Char('c'))), publishing::Action::Nothing), "still private");
+
+        let Some(Overlay::Publishing(publishing)) = &mut app.overlay else { panic!("the overlay closed") };
+        let id = publishing.id;
+        assert!(matches!(publishing.key(press(KeyCode::Down)), publishing::Action::Request(_)));
+        assert!(matches!(publishing.key(press(KeyCode::Down)), publishing::Action::Nothing), "saving");
+
+        app.key(ctrl_c());
+        app.receive(Message::To(id, Reply::Published(book_page_id, Ok(publication(true)))));
+        app.key(press(KeyCode::Esc));
+
+        let Some(Overlay::Publishing(publishing)) = &mut app.overlay else { panic!("the overlay is gone") };
+        assert!(matches!(publishing.key(press(KeyCode::Char('c'))), publishing::Action::Copy(_)));
+        assert!(matches!(&app.screen, Screen::Book(page) if page.book.ready().unwrap().published));
+    }
+
+    #[test]
+    fn search_results_arrive_under_the_quit_question() {
+        let mut app = App::new(Images::none());
+        let search = Search::new(None, "every book".to_string());
+        let id = search.id;
+        app.overlay = Some(Overlay::Search(Box::new(search)));
+        app.paste("rabbit");
+        app.key(press(KeyCode::Enter));
+
+        app.key(ctrl_c());
+        app.receive(Message::To(id, Reply::Found("rabbit".to_string(), Ok(Vec::new()))));
+        app.key(press(KeyCode::Esc));
+
+        assert!(matches!(&app.overlay, Some(Overlay::Search(search)) if matches!(search.results, Some(Loading::Ready(_)))));
+    }
+
+    #[test]
+    fn only_the_last_invite_reset_shows_its_link() {
+        let mut app = App::new(Images::none());
+        let mut page = SettingsPage::new(HOST.to_string());
+        page.people = Loading::Ready(data::People { join_url: Some(format!("{HOST}/join/old")), can_administer: true, people: Vec::new() });
+        let id = page.id;
+        let _first = page.reset_invite();
+        let _second = page.reset_invite();
+        let profile = ProfilePage::new(HOST.to_string());
+        app.screen = Screen::Profile(Box::new(profile), Box::new(Screen::Settings(Box::new(page), books())));
+
+        app.receive(Message::To(next_id(), Reply::InviteReset(2, Ok(format!("{HOST}/join/elsewhere")))));
+        app.receive(Message::To(id, Reply::InviteReset(2, Ok(format!("{HOST}/join/second")))));
+        app.receive(Message::To(id, Reply::InviteReset(1, Ok(format!("{HOST}/join/first")))));
+
+        let Screen::Profile(_, back) = &app.screen else { panic!("the profile closed") };
+        let Screen::Settings(page, _) = back.as_ref() else { panic!("no settings") };
+        assert_eq!(page.people.ready().unwrap().join_url, Some(format!("{HOST}/join/second")));
+    }
+
+    #[test]
+    fn a_profile_save_finishing_leaves_a_reopened_profile_alone() {
+        let mut app = App::new(Images::none());
+        let mut page = ProfilePage::new(HOST.to_string());
+        page.loaded(Ok(data::Profile { id: 1, name: "Stanko".to_string(), email: "stanko@example.com".to_string() }));
+        app.screen = Screen::Profile(Box::new(page), Box::new(Screen::Instances(InstancePicker::new(0))));
+        app.key(press(KeyCode::Down));
+        app.key(press(KeyCode::Down));
+        app.paste("secret");
+
+        app.receive(Message::To(next_id(), Reply::ProfileSaved(Ok(()))));
+        assert!(matches!(&app.screen, Screen::Profile(page, _) if page.password() == "secret"));
+        assert!(app.notice.is_none());
     }
 
     #[test]

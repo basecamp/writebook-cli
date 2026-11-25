@@ -12,12 +12,13 @@ use super::help::Binding;
 use super::images::{Images, Source};
 use super::search::Search;
 use super::views::{self, Row, View};
-use super::{Loading, Message, Overlay, Request, theme};
+use super::{Id, Loading, Message, Overlay, Reply, Request, next_id, theme};
 
 const TILE_WIDTH: u16 = 24;
 const TILE_HEIGHT: u16 = 18;
 
 pub struct Books {
+    pub id: Id,
     pub host: String,
     pub name: String,
     pub books: Loading<Vec<BookCard>>,
@@ -38,16 +39,18 @@ pub enum Action {
 
 impl Books {
     pub fn new(host: String, name: String) -> Books {
-        Books { host, name, books: Loading::Pending, selected: 0, columns: 1, offset: 0 }
+        Books { id: next_id(), host, name, books: Loading::Pending, selected: 0, columns: 1, offset: 0 }
     }
 
     pub fn load(&self) -> Request {
+        let id = self.id;
         let host = self.host.clone();
+        Box::new(move || Message::To(id, Reply::Books(data::books(&host))))
+    }
 
-        Box::new(move || {
-            let books = data::books(&host);
-            Message::Books(host, books)
-        })
+    /// The books as loaded.
+    pub fn loaded(&mut self, books: anyhow::Result<Vec<BookCard>>) {
+        self.books = Loading::from(books);
     }
 
     pub fn covers(&self) -> Vec<String> {
@@ -171,6 +174,7 @@ mod tests {
 
     fn books_screen() -> Books {
         Books {
+            id: 1,
             host: "https://books.example.com".to_string(),
             name: "books.example.com".to_string(),
             books: Loading::Ready(vec![card(1, "Handbook", Some("How we work")), card(2, "Guide", None)]),

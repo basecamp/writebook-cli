@@ -9,9 +9,12 @@ use ratatui::text::{Line, Span};
 
 use super::data::{self, Book, Publication};
 use super::help::Binding;
-use super::{Message, Request, views};
+use super::{Id, Message, Reply, Request, next_id, views};
 
 pub struct Publishing {
+    pub id: Id,
+    /// The book page it was opened from, to show the change there too.
+    book_page: Id,
     host: String,
     book_id: u64,
     published: bool,
@@ -31,10 +34,12 @@ pub enum Action {
 }
 
 impl Publishing {
-    pub fn new(host: &str, book_id: u64, book: &Book) -> Publishing {
+    pub fn new(host: &str, book_page: Id, book: &Book) -> Publishing {
         Publishing {
+            id: next_id(),
+            book_page,
             host: host.to_string(),
-            book_id,
+            book_id: book.id,
             published: book.published,
             slug: book.slug.clone(),
             url: format!("{host}/{}/{}", book.id, book.slug),
@@ -79,11 +84,13 @@ impl Publishing {
     }
 
     fn publish(&mut self, published: bool, slug: String) -> Action {
+        let id = self.id;
+        let book_page = self.book_page;
         let host = self.host.clone();
         let book_id = self.book_id;
         self.saving = true;
 
-        Action::Request(Box::new(move || Message::Published(data::publish(&host, book_id, published, &slug))))
+        Action::Request(Box::new(move || Message::To(id, Reply::Published(book_page, data::publish(&host, book_id, published, &slug)))))
     }
 
     /// Done saving: show how the book is published now, if that went through.
@@ -147,6 +154,8 @@ mod tests {
     #[test]
     fn edits_only_the_slug_of_the_public_address() {
         let publishing = Publishing {
+            id: 1,
+            book_page: 2,
             host: "https://books.example.com".to_string(),
             book_id: 2,
             published: true,

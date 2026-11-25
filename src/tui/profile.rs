@@ -9,9 +9,10 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use super::data::{self, Profile};
-use super::{Loading, Message, Request, views};
+use super::{Id, Loading, Message, Reply, Request, next_id, views};
 
 pub struct ProfilePage {
+    pub id: Id,
     pub host: String,
     pub profile: Loading<Profile>,
     /// Name, email, new password, current password.
@@ -32,16 +33,13 @@ pub enum Action {
 
 impl ProfilePage {
     pub fn new(host: String) -> ProfilePage {
-        ProfilePage { host, profile: Loading::Pending, fields: Default::default(), original_email: String::new(), focus: 0, saving: false }
+        ProfilePage { id: next_id(), host, profile: Loading::Pending, fields: Default::default(), original_email: String::new(), focus: 0, saving: false }
     }
 
     pub fn load(&self) -> Request {
+        let id = self.id;
         let host = self.host.clone();
-
-        Box::new(move || {
-            let profile = data::profile(&host);
-            Message::ProfileLoaded(host, profile)
-        })
+        Box::new(move || Message::To(id, Reply::ProfileLoaded(data::profile(&host))))
     }
 
     pub fn loaded(&mut self, profile: anyhow::Result<Profile>) {
@@ -129,7 +127,8 @@ impl ProfilePage {
     }
 
     pub fn save(&mut self) -> Option<Request> {
-        let id = self.profile.ready()?.id;
+        let profile_id = self.profile.ready()?.id;
+        let id = self.id;
         let host = self.host.clone();
         let name = self.name().to_string();
         let email = self.email().to_string();
@@ -137,7 +136,7 @@ impl ProfilePage {
         let current = self.current_password().to_string();
         self.saving = true;
 
-        Some(Box::new(move || Message::ProfileSaved(data::save_profile(&host, id, &name, &email, &password, &current))))
+        Some(Box::new(move || Message::To(id, Reply::ProfileSaved(data::save_profile(&host, profile_id, &name, &email, &password, &current)))))
     }
 
     /// After saving, the passwords are cleared and the email is the saved one.
