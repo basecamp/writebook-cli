@@ -18,11 +18,21 @@ use super::data;
 /// How many images are fetched and decoded at once.
 const WORKERS: usize = 4;
 
+/// How many decoded images are kept. The one drawn longest ago goes first,
+/// and is fetched again when it's drawn again.
+const KEPT: usize = 64;
+
 pub struct Images {
     picker: Picker,
     images: HashMap<Source, Image>,
+    /// When each image was last fetched or drawn, counted in draws.
+    used: HashMap<Source, u64>,
+    clock: u64,
     /// The images to fetch, for the workers, which start with the first one.
     jobs: Option<Sender<Job>>,
+    /// Where the workers send what they fetch, kept to fetch an image again
+    /// when it's drawn after it was dropped.
+    messages: Option<Sender<Message>>,
 }
 
 /// Where an image comes from: a path or address on an instance's pages, or a
@@ -60,12 +70,16 @@ impl Images {
         let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
         release_the_query_reader();
 
-        Images { picker, images: HashMap::new(), jobs: None }
+        Images::new(picker)
     }
 
     #[cfg(test)]
     pub fn none() -> Images {
-        Images { picker: Picker::halfblocks(), images: HashMap::new(), jobs: None }
+        Images::new(Picker::halfblocks())
+    }
+
+    fn new(picker: Picker) -> Images {
+        Images { picker, images: HashMap::new(), used: HashMap::new(), clock: 0, jobs: None, messages: None }
     }
 
     /// Start fetching an image from an instance unless it's here or on its
@@ -89,6 +103,8 @@ impl Images {
     }
 
     fn fetch(&mut self, source: Source, messages: &Sender<Message>) {
+        self.messages = Some(messages.clone());
+        self.touch(&source);
         self.images.insert(source.clone(), Image::Loading);
         let jobs = self.jobs.get_or_insert_with(start_workers);
         let _ = jobs.send(Job { source, messages: messages.clone() });
@@ -101,6 +117,29 @@ impl Images {
         };
 
         self.images.insert(source, image);
+        self.drop_the_oldest();
+    }
+
+    fn touch(&mut self, source: &Source) {
+        self.clock += 1;
+        self.used.insert(source.clone(), self.clock);
+    }
+
+    /// Images on their way stay, so they aren't fetched twice.
+    fn drop_the_oldest(&mut self) {
+        while self.images.values().filter(|it| !matches!(it, Image::Loading)).count() > KEPT {
+            let oldest = self
+                .images
+                .iter()
+                .filter(|(_, image)| !matches!(image, Image::Loading))
+                .min_by_key(|(source, _)| self.used.get(*source))
+                .map(|(source, _)| source.clone());
+
+            if let Some(source) = oldest {
+                self.images.remove(&source);
+                self.used.remove(&source);
+            }
+        }
     }
 
     pub fn failed(&self, source: &Source) -> bool {
@@ -118,6 +157,14 @@ impl Images {
     }
 
     fn draw_aligned(&mut self, frame: &mut Frame, area: Rect, source: &Source, centered: bool) -> bool {
+        if !self.images.contains_key(source)
+            && let Some(messages) = self.messages.clone()
+        {
+            self.fetch(source.clone(), &messages);
+        } else if self.images.contains_key(source) {
+            self.touch(source);
+        }
+
         match self.images.get_mut(source) {
             Some(Image::Ready(protocol)) => {
                 let size = protocol.size_for(Resize::Fit(None), area.as_size());
@@ -212,5 +259,33 @@ mod tests {
             .unwrap();
         assert!(images.failed(&theirs));
         assert!(!images.failed(&mine));
+    }
+
+    #[test]
+    fn drops_the_image_drawn_longest_ago_and_fetches_it_again_when_drawn() {
+        let mut images = Images::none();
+        let (messages, fetched) = channel();
+        let paths: Vec<PathBuf> = (0..=KEPT).map(|it| PathBuf::from(format!("/nonexistent/{it}.png"))).collect();
+        let sources: Vec<Source> = paths.iter().map(|it| Source::file(it)).collect();
+
+        for path in &paths {
+            images.want_file(path, &messages);
+            images.arrived(Source::file(path), Ok(image::DynamicImage::new_rgb8(4, 4)));
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(10, 5)).unwrap();
+        terminal
+            .draw(|frame| {
+                assert!(!images.draw(frame, frame.area(), &sources[0]));
+                assert!(images.draw(frame, frame.area(), &sources[1]));
+            })
+            .unwrap();
+
+        let fetches = fetched
+            .iter()
+            .take(KEPT + 2)
+            .filter(|it| matches!(it, Message::Image(source, _) if *source == sources[0]))
+            .count();
+        assert_eq!(fetches, 2);
     }
 }
