@@ -154,9 +154,13 @@ pub fn writebook_in(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) 
     command.output().unwrap()
 }
 
+/// Tests run side by side, so the counter keeps two from getting the same one.
 pub fn tempdir() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("writebook-test-{}-{nanos}", std::process::id()));
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("writebook-test-{}-{nanos}-{count}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

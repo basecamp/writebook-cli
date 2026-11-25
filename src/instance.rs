@@ -166,6 +166,7 @@ pub fn remove(instance: &str) -> Result<()> {
         for profile in &removed.profiles {
             creds::forget(&removed.url, profile)?;
         }
+        creds::forget_unfinished_sign_ins(&removed.url)?;
 
         inventory.instances.remove(&alias);
 

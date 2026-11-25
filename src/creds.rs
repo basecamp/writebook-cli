@@ -180,9 +180,15 @@ pub fn forget(host: &str, profile: &str) -> Result<()> {
             }
         }
 
-        sign_in::forget_pending(host)?;
+        sign_in::forget_pending(host, profile)?;
         storage::delete(host, profile)
     })
+}
+
+/// Drop the sign-ins to a site that were started but never finished, for
+/// any profile.
+pub fn forget_unfinished_sign_ins(host: &str) -> Result<()> {
+    sign_in::forget_all_pending(host)
 }
 
 fn revoke(host: &str, credentials: &Credentials) -> Result<()> {
@@ -218,10 +224,10 @@ fn login(host: &str, profile: &str) -> Result<Credentials> {
 /// out: the lock lets one go first, and the other then finds its work done.
 fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials> {
     storage::locked(|| {
-        if let Some(current) = storage::load(host, profile)? {
-            if current.refresh_token != stale.refresh_token && !expired(&current) {
-                return Ok(current);
-            }
+        match storage::load(host, profile)? {
+            Some(current) if current.refresh_token != stale.refresh_token && !expired(&current) => return Ok(current),
+            Some(_) => {}
+            None => bail!("signed out of {host} in the meantime"),
         }
 
         let (status, body) = post_token_request(

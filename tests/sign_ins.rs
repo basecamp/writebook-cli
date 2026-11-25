@@ -39,6 +39,25 @@ fn signing_out_revokes_the_sign_in_and_drops_unfinished_ones() {
 }
 
 #[test]
+fn removing_a_profile_leaves_other_unfinished_sign_ins_alone() {
+    let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
+    let config = tempdir();
+    let env = [("XDG_CONFIG_HOME", config.to_str().unwrap())];
+    sign_in(&server, &env);
+
+    let started = writebook(&["profile", "add", "ops"], &env);
+    assert!(started.status.success(), "{}", stderr(&started));
+    let finished = writebook(&["profile", "add", "ops", "--code", "WXYZ-2345"], &env);
+    assert!(finished.status.success(), "{}", stderr(&finished));
+    let started = writebook(&["profile", "add", "editor"], &env);
+    assert!(started.status.success(), "{}", stderr(&started));
+
+    let removed = writebook(&["profile", "remove", "ops"], &env);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert!(pending_sign_ins(&config).contains(&format!("{} editor", server.url)), "{}", pending_sign_ins(&config));
+}
+
+#[test]
 fn one_command_at_a_time_renews_a_sign_in() {
     let refreshes = Arc::new(Mutex::new(Vec::new()));
     let server = fake_writebook(refreshes.clone());
@@ -142,15 +161,17 @@ fn owner_only_access_list() -> String {
 }
 
 /// Run from a file, since PowerShell mangles quotes on its command line.
+/// PowerShell 7's module path, inherited in CI, breaks Windows PowerShell's.
 #[cfg(windows)]
 fn powershell(script: &str, argument: &Path) -> String {
     let file = tempdir().join("script.ps1");
-    std::fs::write(&file, script).unwrap();
+    std::fs::write(&file, format!("$ErrorActionPreference = 'Stop'\n{script}")).unwrap();
 
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&file)
         .arg(argument)
+        .env_remove("PSModulePath")
         .output()
         .unwrap();
 

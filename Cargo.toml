@@ -20,6 +20,7 @@ serde_json = "1"
 sha2 = "0.10"
 toml = "0.9"
 ureq = { version = "3", features = ["json"] }
+url = "2"
 usage = { version = "6", package = "usage-rs", features = ["completions"] }
 
 [target.'cfg(unix)'.dependencies]

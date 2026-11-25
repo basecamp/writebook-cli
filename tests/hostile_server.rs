@@ -31,6 +31,24 @@ fn clone_stays_inside_the_checkout() {
     assert!(!work.join("planted.txt").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn clone_never_follows_a_symlink_named_like_the_book() {
+    let server = Server::start(|request| match request.path.as_str() {
+        "/books/4/manifest.json" => reply(200, &book_with_a_picture()),
+        _ => reply(404, ""),
+    });
+    let outside = tempdir();
+    let work = tempdir();
+    std::os::unix::fs::symlink(&outside, work.join("handbook")).unwrap();
+
+    let output = writebook_in(&work, &["clone", &format!("{}/4/handbook", server.url)], &token_for(&server));
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("is a symlink"), "{}", stderr(&output));
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+}
+
 #[test]
 fn never_sends_the_token_to_an_image_url_on_another_server() {
     let elsewhere = Server::start(|_| reply(200, "PNG"));
@@ -50,7 +68,10 @@ fn never_sends_the_token_to_an_image_url_on_another_server() {
 
 #[test]
 fn keeps_the_token_only_while_redirects_stay_on_the_site() {
-    let elsewhere = Server::start(|_| reply(200, "PNG"));
+    let elsewhere = Server::start(|request| match request.path.as_str() {
+        "/a.png" => redirect("final.png"),
+        _ => reply(200, "PNG"),
+    });
     let elsewhere_url = elsewhere.url.clone();
     let server = Server::start(move |request| match request.path.as_str() {
         "/books/4/manifest.json" => reply(200, &book_with_a_picture()),
@@ -71,8 +92,9 @@ fn keeps_the_token_only_while_redirects_stay_on_the_site() {
     assert_eq!(std::fs::read_to_string(checkout.join("assets/a.png")).unwrap(), "PNG");
 
     let requests = elsewhere.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].header("Authorization"), None);
+    assert_eq!(requests.iter().map(|it| it.path.as_str()).collect::<Vec<_>>(), ["/a.png", "/final.png"]);
+    assert!(requests.iter().all(|it| it.header("Authorization").is_none()));
+    assert!(server.requests().iter().all(|it| it.path != "/final.png"));
 }
 
 #[test]
@@ -90,6 +112,27 @@ fn never_opens_or_prints_a_sign_in_link_to_somewhere_else() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("sent a sign-in link to somewhere else"), "{}", stderr(&output));
     assert!(!stdout(&output).contains("phish.example.com"), "{}", stdout(&output));
+}
+
+#[test]
+fn never_opens_or_prints_a_sign_in_link_with_terminal_escapes() {
+    let server = Server::start(|request| match request.path.as_str() {
+        "/oauth/device_authorizations" => reply(
+            200,
+            &format!(
+                r#"{{"device_code":"wb_dc_secret","user_code":"ABCD-EFGH","verification_uri_complete":"http://{}/approve\u001b]52;c;cm0gLXJmIH4K\u0007","expires_in":600,"interval":5}}"#,
+                request.header("Host").unwrap()
+            ),
+        ),
+        _ => reply(404, ""),
+    });
+
+    let output = writebook(&["instance", "add", &server.url], &[]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("control characters"), "{}", stderr(&output));
+    assert!(!stdout(&output).contains('\x1b'), "{:?}", stdout(&output));
+    assert!(!stderr(&output).contains('\x1b'), "{:?}", stderr(&output));
 }
 
 #[test]

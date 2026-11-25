@@ -67,10 +67,26 @@ fn temporary_sibling(path: &Path) -> Result<std::path::PathBuf> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let parent = path.parent().context("path has no parent directory")?;
-    let name = path.file_name().context("path has no file name")?.to_string_lossy();
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|it| it.subsec_nanos()).unwrap_or_default();
-    let unique = format!(".{name}.{}-{nanos}-{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
+    let unique = format!(".writebook-{}-{nanos}-{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
 
     fs::create_dir_all(parent)?;
     Ok(parent.join(unique))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_a_file_with_the_longest_name_allowed() {
+        let dir = std::env::temp_dir().join(format!("writebook-fsutil-test-{}", std::process::id()));
+        let path = dir.join("a".repeat(255));
+        fs::create_dir_all(&dir).unwrap();
+
+        write_atomically(&path, b"picture").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"picture");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

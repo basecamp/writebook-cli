@@ -114,19 +114,19 @@ impl Checkout {
     }
 
     pub fn config(&self) -> Result<Config> {
-        read_json_or_default(&self.metadata_path("config.json"))
+        read_json_or_default(&self.metadata_path("config.json")?)
     }
 
     pub fn save_config(&self, config: &Config) -> Result<()> {
-        fsutil::write_json_privately(&self.metadata_path("config.json"), config)
+        fsutil::write_json_privately(&self.metadata_path("config.json")?, config)
     }
 
     pub fn state(&self) -> Result<State> {
-        read_json_or_default(&self.metadata_path("state.json"))
+        read_json_or_default(&self.metadata_path("state.json")?)
     }
 
     pub fn save_state(&self, state: &State) -> Result<()> {
-        fsutil::write_json_privately(&self.metadata_path("state.json"), state)
+        fsutil::write_json_privately(&self.metadata_path("state.json")?, state)
     }
 
     pub fn origin(&self) -> Result<Remote> {
@@ -143,11 +143,11 @@ impl Checkout {
     /// from the checkout's own metadata, so neither gets to reach outside the
     /// checkout: `..`, absolute paths, and symlinks along the way are refused.
     pub fn working_path(&self, filename: &str) -> Result<PathBuf> {
-        inside(&self.root, filename)
+        inside(&self.root, "", filename)
     }
 
     pub fn base_path(&self, filename: &str) -> Result<PathBuf> {
-        inside(&self.root.join(".writebook/base"), filename)
+        inside(&self.root, ".writebook/base", filename)
     }
 
     pub fn read_working(&self, filename: &str) -> Result<String> {
@@ -181,8 +181,8 @@ impl Checkout {
         Ok(())
     }
 
-    fn metadata_path(&self, filename: &str) -> PathBuf {
-        self.root.join(".writebook").join(filename)
+    fn metadata_path(&self, filename: &str) -> Result<PathBuf> {
+        inside(&self.root, ".writebook", filename)
     }
 
     fn ignore_metadata_in_git(&self) -> Result<()> {
@@ -209,7 +209,9 @@ impl Checkout {
     }
 }
 
-fn inside(root: &Path, filename: &str) -> Result<PathBuf> {
+/// A file in a directory of the checkout, with no symlink anywhere between
+/// the checkout's root and the file.
+fn inside(root: &Path, directory: &str, filename: &str) -> Result<PathBuf> {
     let relative = Path::new(filename);
 
     if filename.is_empty() || !relative.components().all(|it| matches!(it, Component::Normal(_))) {
@@ -218,7 +220,7 @@ fn inside(root: &Path, filename: &str) -> Result<PathBuf> {
 
     let mut path = root.to_path_buf();
 
-    for component in relative.components() {
+    for component in Path::new(directory).join(relative).components() {
         path.push(component);
 
         if fs::symlink_metadata(&path).is_ok_and(|it| it.file_type().is_symlink()) {
@@ -358,6 +360,14 @@ mod tests {
             std::os::unix::fs::symlink(std::env::temp_dir(), root.join("linked")).unwrap();
             assert!(checkout.working_path("linked/outside.md").is_err());
             assert!(checkout.write_working("linked", "x").is_err());
+
+            fs::remove_dir_all(root.join(".writebook/base")).unwrap();
+            std::os::unix::fs::symlink(std::env::temp_dir(), root.join(".writebook/base")).unwrap();
+            assert!(checkout.write_base("outside.md", "x").is_err());
+
+            fs::remove_dir_all(root.join(".writebook")).unwrap();
+            std::os::unix::fs::symlink(std::env::temp_dir(), root.join(".writebook")).unwrap();
+            assert!(checkout.save_state(&State::default()).is_err());
         }
 
         fs::remove_dir_all(&root).unwrap();

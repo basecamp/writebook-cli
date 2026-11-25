@@ -41,6 +41,17 @@ fn origin_of(url: &str) -> String {
     url[..end].to_lowercase()
 }
 
+/// Where a redirect leads, read relative to the URL that answered with it.
+fn redirect_target(from: &str, location: &str) -> Result<String> {
+    let target = url::Url::parse(from)?.join(location).with_context(|| format!("{from} redirected to {location:?}"))?;
+
+    if matches!(target.scheme(), "https" | "http") {
+        Ok(target.into())
+    } else {
+        anyhow::bail!("{from} redirected to {location:?}, which isn't a web address")
+    }
+}
+
 /// A non-2xx API response. Push inspects the status to tell a stale-write
 /// conflict (409) from everything else.
 #[derive(Debug)]
@@ -213,20 +224,12 @@ impl Client {
             let response = request.call().with_context(|| format!("could not reach {}", self.host))?;
 
             match response.headers().get("location").and_then(|it| it.to_str().ok()) {
-                Some(location) if response.status().is_redirection() => url = self.redirect_target(location)?,
+                Some(location) if response.status().is_redirection() => url = redirect_target(&url, location)?,
                 _ => return Ok(response),
             }
         }
 
         anyhow::bail!("{} redirected {path} too many times", self.host)
-    }
-
-    fn redirect_target(&self, location: &str) -> Result<String> {
-        if location.starts_with("https://") || location.starts_with("http://") {
-            Ok(location.to_string())
-        } else {
-            self.url(location)
-        }
     }
 
     fn multipart_request(&self, path: &str, content_type: &str, body: &[u8]) -> Result<ureq::http::Response<ureq::Body>> {

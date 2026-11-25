@@ -187,6 +187,10 @@ fn start(host: &str) -> Result<Pending> {
         bail!("{host} sent a sign-in link to somewhere else, so it wasn't opened: {link:?}");
     }
 
+    if link.chars().any(char::is_control) {
+        bail!("{host} sent a sign-in link with control characters in it, so it wasn't opened: {link:?}");
+    }
+
     Ok(Pending {
         device_code: string_field(&authorization, "device_code")?,
         user_code,
@@ -296,11 +300,20 @@ fn open_in_browser(url: &str) {
         .spawn();
 }
 
-/// Drop the sign-ins to a site that were started but never finished.
-pub(super) fn forget_pending(host: &str) -> Result<()> {
+/// Drop a sign-in that was started but never finished.
+pub(super) fn forget_pending(host: &str, profile: &str) -> Result<()> {
+    forget_pending_where(|key| key == pending_key(host, profile))
+}
+
+/// Drop every sign-in to a site that was started but never finished.
+pub(super) fn forget_all_pending(host: &str) -> Result<()> {
+    forget_pending_where(|key| key.starts_with(&pending_key(host, "")))
+}
+
+fn forget_pending_where(matches: impl Fn(&str) -> bool) -> Result<()> {
     let mut file = load_pending()?;
     let before = file.sign_ins.len();
-    file.sign_ins.retain(|key, _| !key.starts_with(&pending_key(host, "")));
+    file.sign_ins.retain(|key, _| !matches(key));
 
     if file.sign_ins.len() != before {
         fsutil::write_json_privately(&pending_path()?, &file)?;

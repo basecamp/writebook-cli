@@ -19,6 +19,10 @@ pub fn run(url: &str, directory: Option<&Path>) -> Result<()> {
         None => PathBuf::from(directory_for(&manifest.book.slug, book_id)),
     };
 
+    if fs::symlink_metadata(&root).is_ok_and(|it| it.file_type().is_symlink()) {
+        bail!("{} is a symlink; clone into a directory instead", root.display());
+    }
+
     if root.exists() && fs::read_dir(&root).context("could not inspect the target directory")?.next().is_some() {
         bail!("{} already exists and is not empty", root.display());
     }
