@@ -214,6 +214,7 @@ struct Mcp {
     child: Child,
     output: BufReader<ChildStdout>,
     next_id: u64,
+    _config: support::TempDir,
 }
 
 impl Mcp {
@@ -247,7 +248,7 @@ impl Mcp {
             .spawn()
             .unwrap();
         let output = BufReader::new(child.stdout.take().unwrap());
-        let mut mcp = Mcp { child, output, next_id: 1 };
+        let mut mcp = Mcp { child, output, next_id: 1, _config: config };
 
         let params = initialize()["params"].clone();
         mcp.request("initialize", params);

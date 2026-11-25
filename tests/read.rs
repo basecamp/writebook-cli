@@ -154,7 +154,8 @@ fn agents_never_get_a_browser_sign_in_even_with_a_terminal() {
     // CLAUDECODE marks a run under an agent; the check happens before any
     // terminal test, so it fails fast here too.
     let server = Server::start(|_| reply(500, ""));
-    let target = support::tempdir().join("checkout");
+    let scratch = support::tempdir();
+    let target = scratch.join("checkout");
 
     let output = writebook(&["clone", &format!("{}/4/handbook", server.url), target.to_str().unwrap()], &[("CLAUDECODE", "1")]);
 
@@ -231,7 +232,8 @@ fn unattended_sign_in_fails_fast_instead_of_waiting_for_a_browser() {
     let server = Server::start(|_| {
         reply(200, r#"{"device_code":"d","user_code":"U","verification_uri_complete":"x","expires_in":600,"interval":5}"#)
     });
-    let target = support::tempdir().join("checkout");
+    let scratch = support::tempdir();
+    let target = scratch.join("checkout");
 
     let started = Instant::now();
     let output = writebook(&["clone", &format!("{}/4/handbook", server.url), target.to_str().unwrap()], &[]);
@@ -257,7 +259,8 @@ fn clone_uses_the_given_token() {
             _ => reply(404, ""),
         }
     });
-    let target = support::tempdir().join("checkout");
+    let scratch = support::tempdir();
+    let target = scratch.join("checkout");
 
     let output = writebook(
         &["clone", &format!("{}/4/handbook", server.url), target.to_str().unwrap()],

@@ -379,27 +379,30 @@ fn picture_image_changed(checkout: &Checkout, leaf: &LeafState, filename: &str) 
 mod tests {
     use super::*;
     use crate::checkout::CoverState;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use crate::scratch::TempDir;
 
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    /// A checkout in a folder that's deleted when it goes out of scope.
+    struct ScratchCheckout {
+        checkout: Checkout,
+        _dir: TempDir,
+    }
 
-    fn scratch_checkout() -> Checkout {
-        let root = std::env::temp_dir().join(format!(
-            "writebook-plan-test-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::SeqCst)
-        ));
+    impl std::ops::Deref for ScratchCheckout {
+        type Target = Checkout;
 
-        if root.exists() {
-            std::fs::remove_dir_all(&root).unwrap();
+        fn deref(&self) -> &Checkout {
+            &self.checkout
         }
+    }
 
-        Checkout::create(&root).unwrap()
+    fn scratch_checkout() -> ScratchCheckout {
+        let dir = TempDir::new();
+        ScratchCheckout { checkout: Checkout::create(&dir.join("book")).unwrap(), _dir: dir }
     }
 
     const META: &str = "---\ntitle: Book\nsubtitle: \nauthor: \ntheme: blue\n---\n\n";
 
-    fn fixture() -> (Checkout, State, Document) {
+    fn fixture() -> (ScratchCheckout, State, Document) {
         let checkout = scratch_checkout();
 
         let index = format!("{META}# Part One\n[Intro](intro.md)\n![A pic](assets/pic.jpg)\n");

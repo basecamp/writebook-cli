@@ -251,15 +251,14 @@ fn shown_path(path: &Path) -> String {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+    use crate::scratch::TempDir;
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn folder() -> PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("writebook-files-{}-{n}", std::process::id()));
+    fn folder() -> TempDir {
+        let dir = TempDir::new();
         std::fs::create_dir_all(dir.join("Photos")).unwrap();
         std::fs::create_dir_all(dir.join(".hidden")).unwrap();
         for name in ["cover.png", "notes.txt", "Banner.JPG", "Photos/cat.webp"] {
@@ -274,14 +273,16 @@ mod tests {
 
     #[test]
     fn lists_folders_first_then_the_files_that_fit() {
-        let picker = FilePicker::new("Choose", IMAGES, folder());
+        let root = folder();
+        let picker = FilePicker::new("Choose", IMAGES, root.to_path_buf());
 
         assert_eq!(names(&picker), ["Photos", "Banner.JPG", "cover.png"]);
     }
 
     #[test]
     fn narrows_the_list_as_you_type_and_shows_hidden_folders_for_a_dot() {
-        let mut picker = FilePicker::new("Choose", IMAGES, folder());
+        let root = folder();
+        let mut picker = FilePicker::new("Choose", IMAGES, root.to_path_buf());
 
         picker.key(press(KeyCode::Char('C')));
         picker.key(press(KeyCode::Char('o')));
@@ -295,14 +296,14 @@ mod tests {
     #[test]
     fn opens_folders_goes_back_up_and_picks_a_file() {
         let root = folder();
-        let mut picker = FilePicker::new("Choose", IMAGES, root.clone());
+        let mut picker = FilePicker::new("Choose", IMAGES, root.to_path_buf());
 
         assert!(matches!(picker.key(press(KeyCode::Enter)), Picked::Nothing));
         assert_eq!(picker.dir(), root.join("Photos"));
         assert_eq!(names(&picker), ["cat.webp"]);
 
         picker.key(press(KeyCode::Backspace));
-        assert_eq!(picker.dir(), root);
+        assert_eq!(picker.dir(), &*root);
         assert_eq!(picker.selected_file(), None, "the folder we came from is selected");
 
         picker.key(press(KeyCode::Down));
