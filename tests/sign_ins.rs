@@ -65,6 +65,33 @@ fn one_command_at_a_time_renews_a_sign_in() {
     assert_eq!(*refreshes.lock().unwrap(), ["wb_rt_1"]);
 }
 
+#[test]
+fn says_so_when_the_sign_in_is_in_a_keyring_out_of_reach() {
+    let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
+    let config = tempdir();
+    let env = [("XDG_CONFIG_HOME", config.to_str().unwrap())];
+    sign_in(&server, &env);
+    expire_sign_ins(&config);
+    move_sign_ins_to_the_keyring(&config);
+
+    let listed = writebook(&["book", "list", "--instance", &server.url], &env);
+    assert!(!listed.status.success());
+    assert!(stderr(&listed).contains("is in the system keyring, which this command can't use"), "{}", stderr(&listed));
+
+    let removed = writebook(&["instance", "remove", &server.url], &env);
+    assert!(!removed.status.success());
+    assert!(stderr(&removed).contains("is in the system keyring, which this command can't use"), "{}", stderr(&removed));
+    assert!(std::fs::read_to_string(config.join("writebook/instances.toml")).unwrap().contains(&server.url));
+    assert!(std::fs::read_to_string(config.join("writebook/credentials.json")).unwrap().contains(&format!("{} default", server.url)));
+    assert!(server.requests().iter().all(|it| it.path != "/oauth/revocations"));
+
+    sign_in(&server, &env);
+    expire_sign_ins(&config);
+    let listed = writebook(&["book", "list", "--instance", &server.url], &env);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(stdout(&listed).contains("Ops Handbook"), "{}", stdout(&listed));
+}
+
 #[cfg(unix)]
 #[test]
 fn keeps_sign_ins_in_a_folder_only_you_can_read() {
@@ -100,24 +127,35 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
 /// Whether it keeps what the folders above allow, then who may do what.
 #[cfg(windows)]
 fn access_list(path: &Path) -> String {
+    powershell(
+        "$acl = Get-Acl -LiteralPath $args[0]\n\
+         $acl.AreAccessRulesProtected\n\
+         $acl.Access | ForEach-Object { $_.IdentityReference.Value + ' ' + $_.AccessControlType + ' ' + $_.FileSystemRights }",
+        path,
+    )
+}
+
+#[cfg(windows)]
+fn owner_only_access_list() -> String {
+    let user = powershell("[Security.Principal.WindowsIdentity]::GetCurrent().Name", Path::new(""));
+    format!("True\r\n{} Allow FullControl\r\n", user.trim())
+}
+
+/// Run from a file, since PowerShell mangles quotes on its command line.
+#[cfg(windows)]
+fn powershell(script: &str, argument: &Path) -> String {
+    let file = tempdir().join("script.ps1");
+    std::fs::write(&file, script).unwrap();
+
     let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", "$acl = Get-Acl -LiteralPath $env:TARGET; $acl.AreAccessRulesProtected; $acl.Access | ForEach-Object { \"$($_.IdentityReference) $($_.AccessControlType) $($_.FileSystemRights)\" }"])
-        .env("TARGET", path)
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&file)
+        .arg(argument)
         .output()
         .unwrap();
 
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     String::from_utf8(output.stdout).unwrap()
-}
-
-#[cfg(windows)]
-fn owner_only_access_list() -> String {
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().Name"])
-        .output()
-        .unwrap();
-
-    format!("True\r\n{} Allow FullControl\r\n", String::from_utf8(output.stdout).unwrap().trim())
 }
 
 #[cfg(unix)]
@@ -188,6 +226,17 @@ fn expire_sign_ins(config: &Path) {
         sign_in["expires_at"] = 0.into();
     }
 
+    std::fs::write(&path, credentials.to_string()).unwrap();
+}
+
+/// As if they were saved to the keyring, which the tests can't reach.
+fn move_sign_ins_to_the_keyring(config: &Path) {
+    let path = config.join("writebook/credentials.json");
+    let mut credentials: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let keys: Vec<_> = credentials["sign_ins"].as_object().unwrap().keys().cloned().collect();
+
+    credentials["sign_ins"] = serde_json::json!({});
+    credentials["in_keyring"] = keys.into();
     std::fs::write(&path, credentials.to_string()).unwrap();
 }
 
