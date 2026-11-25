@@ -193,20 +193,24 @@ pub fn stored_access(host: &str, profile: &str) -> Result<Option<Access>> {
 
 /// Fail before changing anything when the sign-in can only read.
 pub fn ensure_can_write(host: &str) -> Result<()> {
-    if given_token(host)?.is_some_and(|it| it.starts_with("wb_api_")) {
-        bail!("WRITEBOOK_TOKEN holds a read-only API token, which can't change books. Sign in to {host} to do that");
+    match given_token(host)? {
+        Some(token) if token.starts_with("wb_api_") => {
+            bail!("WRITEBOOK_TOKEN holds a read-only API token, which can't change books. Sign in to {host} to do that")
+        }
+        Some(_) => Ok(()),
+        None => {
+            let profile = inventory::profile_for(host)?;
+
+            if stored_access(host, &profile)? == Some(Access::ReadOnly) {
+                bail!(
+                    "you're signed in to {host} as {profile} read-only, which can't change books. \
+                     Sign in as a profile that can, like `writebook profile add editor`, and make it the default"
+                );
+            }
+
+            Ok(())
+        }
     }
-
-    let profile = inventory::profile_for(host)?;
-
-    if given_token(host)?.is_none() && stored_access(host, &profile)? == Some(Access::ReadOnly) {
-        bail!(
-            "you're signed in to {host} as {profile} read-only, which can't change books. \
-             Sign in as a profile that can, like `writebook profile add editor`, and make it the default"
-        );
-    }
-
-    Ok(())
 }
 
 /// Sign out of a site as this profile, and tell the site to stop honoring
@@ -252,11 +256,18 @@ fn login(host: &str, profile: &str, access: Access) -> Result<Credentials> {
             "not signed in to {host}, and nobody is at a terminal to approve a browser sign-in. \
              Set WRITEBOOK_TOKEN and WRITEBOOK_TOKEN_HOST, run this once in a terminal to sign in, \
              or sign in in two steps with `{}`",
-            inventory::sign_in_command(host, profile)
+            sign_in_command(host, profile, access)
         );
     }
 
     sign_in::at_terminal(host, profile, access)
+}
+
+fn sign_in_command(host: &str, profile: &str, access: Access) -> String {
+    match access {
+        Access::Full => inventory::sign_in_command(host, profile),
+        Access::ReadOnly => format!("{} --read-only", inventory::sign_in_command(host, profile)),
+    }
 }
 
 /// Trade the refresh token for new credentials. Each refresh token works
@@ -283,10 +294,25 @@ fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials
             bail!("token refresh failed: {}", error_description(&body));
         }
 
-        let credentials = credentials_from(&body)?;
+        let credentials = renewed(host, stale, credentials_from(&body)?, &body)?;
         storage::save(host, profile, &credentials)?;
         Ok(credentials)
     })
+}
+
+/// A renewal keeps the access the sign-in had. One that doesn't say keeps
+/// it as it was; one that claims more is revoked rather than kept.
+fn renewed(host: &str, stale: &Credentials, mut credentials: Credentials, body: &Value) -> Result<Credentials> {
+    if body["scope"].is_null() {
+        credentials.access = stale.access;
+    } else if stale.access == Access::ReadOnly && credentials.access != Access::ReadOnly {
+        if let Err(error) = revoke(host, &credentials) {
+            eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#})");
+        }
+        bail!("{host} renewed a read-only sign-in with full access, so it was revoked. Sign in again");
+    }
+
+    Ok(credentials)
 }
 
 /// Writebooks from before read-only sign-ins leave the scope out, and give
