@@ -82,6 +82,44 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     assert_eq!(std::fs::metadata(folder.join("credentials.json")).unwrap().permissions().mode() & 0o777, 0o600);
 }
 
+#[cfg(windows)]
+#[test]
+fn keeps_sign_ins_in_a_folder_only_you_can_read() {
+    let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
+    let config = tempdir();
+    let folder = config.join("writebook");
+    std::fs::create_dir(&folder).unwrap();
+    assert_ne!(access_list(&folder), owner_only_access_list());
+
+    sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
+
+    assert_eq!(access_list(&folder), owner_only_access_list());
+    assert_eq!(access_list(&folder.join("credentials.json")), owner_only_access_list());
+}
+
+/// Whether it keeps what the folders above allow, then who may do what.
+#[cfg(windows)]
+fn access_list(path: &Path) -> String {
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "$acl = Get-Acl -LiteralPath $env:TARGET; $acl.AreAccessRulesProtected; $acl.Access | ForEach-Object { \"$($_.IdentityReference) $($_.AccessControlType) $($_.FileSystemRights)\" }"])
+        .env("TARGET", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[cfg(windows)]
+fn owner_only_access_list() -> String {
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().Name"])
+        .output()
+        .unwrap();
+
+    format!("True\r\n{} Allow FullControl\r\n", String::from_utf8(output.stdout).unwrap().trim())
+}
+
 #[cfg(unix)]
 #[test]
 fn never_writes_through_a_file_planted_where_a_temporary_file_goes() {

@@ -6,41 +6,14 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+mod owner_only;
+
 pub fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     let temporary = temporary_sibling(path)?;
     fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?.write_all(contents)?;
     fs::rename(&temporary, path).with_context(|| format!("could not write {}", path.display()))?;
     Ok(())
-}
-
-/// Like write_json_privately, for sign-ins and other secrets.
-pub fn write_secret_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    ensure_private_location(path)?;
-    write_json_privately(path, value)
-}
-
-#[cfg(unix)]
-fn ensure_private_location(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-/// A folder in the user's profile only lets that user read it, and the files
-/// in it inherit that. Anywhere else, such as a shared XDG_CONFIG_HOME, other
-/// accounts might read the secret, so it isn't written there. The folder is
-/// checked by its resolved path, so `..` and junctions can't lead out of the
-/// profile.
-#[cfg(windows)]
-fn ensure_private_location(path: &Path) -> Result<()> {
-    let parent = path.parent().context("path has no parent directory")?;
-    fs::create_dir_all(parent)?;
-    let folder = fs::canonicalize(parent)?;
-    let home = fs::canonicalize(dirs::home_dir().context("could not determine the home directory")?)?;
-
-    if folder.starts_with(&home) {
-        Ok(())
-    } else {
-        anyhow::bail!("won't save sign-ins in {}: on Windows, writebook keeps them inside your user profile ({})", folder.display(), home.display())
-    }
 }
 
 pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -60,10 +33,12 @@ fn create_private(path: &Path) -> Result<fs::File> {
     Ok(fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?)
 }
 
-/// Windows has no file mode. A new file gets the ACL of its folder.
+/// Restricted while still empty, before anything is written to it.
 #[cfg(windows)]
 fn create_private(path: &Path) -> Result<fs::File> {
-    Ok(fs::OpenOptions::new().write(true).create_new(true).open(path)?)
+    let file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    owner_only::restrict(path)?;
+    Ok(file)
 }
 
 /// A directory only its owner can enter. One that's already there is made so.
@@ -77,7 +52,8 @@ pub fn create_private_dir(path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 pub fn create_private_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).with_context(|| format!("could not create {}", path.display()))
+    fs::create_dir_all(path).with_context(|| format!("could not create {}", path.display()))?;
+    owner_only::restrict(path)
 }
 
 pub fn read_to_string(path: &Path) -> Result<String> {

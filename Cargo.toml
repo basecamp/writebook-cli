@@ -25,6 +25,9 @@ usage = { version = "6", package = "usage-rs", features = ["completions"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
+
 # The code reads better with these, so CI's `cargo clippy -D warnings`
 # leaves them alone.
 [lints.clippy]
