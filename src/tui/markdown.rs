@@ -160,6 +160,7 @@ impl Renderer {
             TagEnd::Item => {
                 self.flush();
                 self.prefixes.pop();
+                self.drop_bullets_deeper_than(self.prefixes.len());
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                 self.styles.pop();
@@ -182,6 +183,12 @@ impl Renderer {
             }
             _ => {}
         }
+    }
+
+    /// An empty item, or one with only a picture, never gets to show its
+    /// bullet, which would otherwise wait for a line it has no prefix for.
+    fn drop_bullets_deeper_than(&mut self, depth: usize) {
+        self.bullets.retain(|(position, _)| *position < depth);
     }
 
     fn style(&self) -> Style {
@@ -338,6 +345,13 @@ mod tests {
         assert_eq!(text(&render("- > Quoted in a list\n  > still quoted", 40)), ["• │ Quoted in a list still quoted"]);
         assert_eq!(text(&render("- - inner\n  - next\n- outer", 40)), ["• • inner", "   • next", "• outer"]);
         assert_eq!(text(&render("1. > a quote that wraps here", 14)), ["1. │ a quote ", "   │ that ", "   │ wraps ", "   │ here"]);
+    }
+
+    #[test]
+    fn an_empty_item_or_one_with_only_a_picture_leaves_no_bullet_behind() {
+        assert_eq!(text(&render("- \n\nAfter", 40)), ["", "After"]);
+        assert_eq!(text(&render("- ![a](/u/a.png)\n\nAfter", 40)), ["[image /u/a.png]", "", "After"]);
+        assert_eq!(text(&render("- one\n-\n\nAfter", 40)), ["• one", "", "After"]);
     }
 
     #[test]
