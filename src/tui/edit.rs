@@ -326,7 +326,7 @@ fn draw_access(frame: &mut Frame, area: Rect, form: &BookForm, focused: Option<F
             Role::None if form.everyone => "can read",
             Role::None => "no access",
         };
-        let name = if member.administrator { format!("♛ {}", member.name) } else { member.name.clone() };
+        let name = if member.can_administer { format!("♛ {}", member.name) } else { member.name.clone() };
         rows.push(row(inside.width, &name, role, focused == Some(Field::Member(index)), !member.fixed()));
     }
 
@@ -390,8 +390,8 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn member(id: u64, role: Role, administrator: bool) -> Member {
-        Member { id, name: format!("Person {id}"), role, administrator, current: false }
+    fn member(id: u64, role: Role, can_administer: bool) -> Member {
+        Member { id, name: format!("Person {id}"), role, can_administer, current: false }
     }
 
     fn page(book_id: Option<u64>) -> EditPage {

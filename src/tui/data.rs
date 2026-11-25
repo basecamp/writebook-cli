@@ -144,7 +144,7 @@ pub fn add(host: &str, book_id: u64, leaf: &NewLeaf) -> Result<()> {
             client.post(&format!("/books/{book_id}/sections.json"), &json!({ "leaf": { "title": title }, "section": { "body": "" } }))?;
         }
         NewLeaf::Picture { caption, path } => {
-            let path = shellexpand(path);
+            let path = expand_home(path);
             let bytes = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
             let filename = std::path::Path::new(&path).file_name().and_then(|it| it.to_str()).unwrap_or("picture");
 
@@ -200,7 +200,7 @@ fn text(value: &Value, field: &str) -> Option<String> {
     value[field].as_str().map(str::to_string).filter(|it| !it.is_empty())
 }
 
-fn shellexpand(path: &str) -> String {
+fn expand_home(path: &str) -> String {
     match (path.strip_prefix("~/"), dirs::home_dir()) {
         (Some(rest), Some(home)) => home.join(rest).to_string_lossy().into_owned(),
         _ => path.to_string(),
@@ -228,7 +228,7 @@ pub struct Member {
     pub name: String,
     pub role: Role,
     #[serde(default)]
-    pub administrator: bool,
+    pub can_administer: bool,
     #[serde(default)]
     pub current: bool,
 }
@@ -236,7 +236,7 @@ pub struct Member {
 impl Member {
     /// Administrators can always edit, and nobody takes their own access away.
     pub fn fixed(&self) -> bool {
-        self.administrator || self.current
+        self.can_administer || self.current
     }
 }
 
@@ -276,7 +276,7 @@ pub fn save_book(host: &str, form: &BookForm) -> Result<u64> {
     let everyone = form.everyone.to_string();
     let cover = match &form.new_cover {
         Some(path) => {
-            let path = shellexpand(path);
+            let path = expand_home(path);
             let bytes = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
             let filename = std::path::Path::new(&path).file_name().and_then(|it| it.to_str()).unwrap_or("cover").to_string();
             Some((filename, bytes))
@@ -506,5 +506,33 @@ pub fn save_profile(host: &str, id: u64, name: &str, email: &str, password: &str
             }
             _ => Err(error),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_who_administers_the_instance_from_the_book_form() {
+        let members: Vec<Member> = serde_json::from_value(json!([
+            { "id": 1, "name": "Ann", "role": "editor", "can_administer": true, "current": false },
+            { "id": 2, "name": "Bob", "role": "reader" }
+        ]))
+        .unwrap();
+
+        assert!(members[0].can_administer);
+        assert!(members[0].fixed());
+        assert!(!members[1].can_administer);
+        assert!(!members[1].fixed());
+    }
+
+    #[test]
+    fn expands_only_a_leading_tilde_to_the_home_folder() {
+        let home = dirs::home_dir().unwrap();
+
+        assert_eq!(expand_home("~/covers/a.png"), home.join("covers/a.png").to_string_lossy());
+        assert_eq!(expand_home("/tmp/~/a.png"), "/tmp/~/a.png");
+        assert_eq!(expand_home("~a.png"), "~a.png");
     }
 }
