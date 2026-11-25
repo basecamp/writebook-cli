@@ -162,6 +162,9 @@ enum InstanceCommand {
         /// The approval code Writebook showed after you approved
         #[usage(long)]
         code: Option<String>,
+        /// Sign in so this device can read books but not change them
+        #[usage(long)]
+        read_only: bool,
     },
     /// List instances and whether you're signed in to each
     List {
@@ -200,6 +203,9 @@ enum ProfileCommand {
         /// The approval code Writebook showed after you approved
         #[usage(long)]
         code: Option<String>,
+        /// Sign in so this device can read books but not change them
+        #[usage(long)]
+        read_only: bool,
     },
     /// List an instance's profiles; * marks the default
     List {
@@ -326,13 +332,17 @@ fn run(cli: Cli) -> Result<()> {
         Command::Status => status::run(),
         Command::Diff { remote } => diff_cmd::run(remote),
         Command::Instance { command } => match command {
-            InstanceCommand::Add { url, alias, code } => instance::add(&url, alias.as_deref(), cli.profile.as_deref(), code.as_deref()),
+            InstanceCommand::Add { url, alias, code, read_only } => {
+                instance::add(&url, alias.as_deref(), cli.profile.as_deref(), code.as_deref(), creds::Access::from_flag(read_only))
+            }
             InstanceCommand::List { json, markdown, jq } => instance::list(Format::from_flags(json, markdown, jq)?),
             InstanceCommand::Remove { instance } => instance::remove(&instance),
             InstanceCommand::SetDefault { instance } => instance::set_default(&instance),
         },
         Command::Profile { command } => match command {
-            ProfileCommand::Add { name, instance, code } => profile::add(&name, instance.as_deref(), code.as_deref()),
+            ProfileCommand::Add { name, instance, code, read_only } => {
+                profile::add(&name, instance.as_deref(), code.as_deref(), creds::Access::from_flag(read_only))
+            }
             ProfileCommand::List { instance } => profile::list(instance.as_deref()),
             ProfileCommand::Remove { name, instance } => profile::remove(&name, instance.as_deref()),
             ProfileCommand::SetDefault { name, instance } => profile::set_default(&name, instance.as_deref()),

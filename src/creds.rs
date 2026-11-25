@@ -43,6 +43,27 @@ pub struct Credentials {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: u64,
+    #[serde(default)]
+    pub access: Access,
+}
+
+/// What a sign-in may do. Writebook calls a read-only one scope "read".
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Access {
+    #[default]
+    Full,
+    ReadOnly,
+}
+
+impl Access {
+    pub fn from_flag(read_only: bool) -> Access {
+        if read_only {
+            Access::ReadOnly
+        } else {
+            Access::Full
+        }
+    }
 }
 
 /// Use this token, for the given site, instead of the stored sign-in.
@@ -110,9 +131,9 @@ pub fn access_token(host: &str) -> Result<String> {
         Some(credentials) if !expired(&credentials) => Ok(credentials.access_token),
         Some(credentials) => match refresh(host, &profile, &credentials) {
             Ok(refreshed) => Ok(refreshed.access_token),
-            Err(_) => Ok(login(host, &profile)?.access_token),
+            Err(_) => Ok(login(host, &profile, credentials.access)?.access_token),
         },
-        None => Ok(login(host, &profile)?.access_token),
+        None => Ok(login(host, &profile, Access::Full)?.access_token),
     }
 }
 
@@ -129,9 +150,9 @@ pub fn renewed_access_token(host: &str) -> Result<String> {
     match storage::load(host, &profile)? {
         Some(credentials) => match refresh(host, &profile, &credentials) {
             Ok(refreshed) => Ok(refreshed.access_token),
-            Err(_) => Ok(login(host, &profile)?.access_token),
+            Err(_) => Ok(login(host, &profile, credentials.access)?.access_token),
         },
-        None => Ok(login(host, &profile)?.access_token),
+        None => Ok(login(host, &profile, Access::Full)?.access_token),
     }
 }
 
@@ -164,10 +185,28 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
     }
 }
 
-/// Whether there's a stored sign-in to this site as this profile. It may
-/// have expired; it's renewed when used.
-pub fn signed_in(host: &str, profile: &str) -> Result<bool> {
-    Ok(storage::load(host, profile)?.is_some())
+/// What the stored sign-in to this site as this profile may do, if there is
+/// one. It may have expired; it's renewed when used.
+pub fn stored_access(host: &str, profile: &str) -> Result<Option<Access>> {
+    Ok(storage::load(host, profile)?.map(|it| it.access))
+}
+
+/// Fail before changing anything when the sign-in can only read.
+pub fn ensure_can_write(host: &str) -> Result<()> {
+    if given_token(host)?.is_some_and(|it| it.starts_with("wb_api_")) {
+        bail!("WRITEBOOK_TOKEN holds a read-only API token, which can't change books. Sign in to {host} to do that");
+    }
+
+    let profile = inventory::profile_for(host)?;
+
+    if given_token(host)?.is_none() && stored_access(host, &profile)? == Some(Access::ReadOnly) {
+        bail!(
+            "you're signed in to {host} as {profile} read-only, which can't change books. \
+             Sign in as a profile that can, like `writebook profile add editor`, and make it the default"
+        );
+    }
+
+    Ok(())
 }
 
 /// Sign out of a site as this profile, and tell the site to stop honoring
@@ -206,7 +245,8 @@ fn revoke(host: &str, credentials: &Credentials) -> Result<()> {
     }
 }
 
-fn login(host: &str, profile: &str) -> Result<Credentials> {
+/// Sign in again with the same access the last sign-in had.
+fn login(host: &str, profile: &str, access: Access) -> Result<Credentials> {
     if !someone_can_approve() {
         bail!(
             "not signed in to {host}, and nobody is at a terminal to approve a browser sign-in. \
@@ -216,7 +256,7 @@ fn login(host: &str, profile: &str) -> Result<Credentials> {
         );
     }
 
-    sign_in::at_terminal(host, profile)
+    sign_in::at_terminal(host, profile, access)
 }
 
 /// Trade the refresh token for new credentials. Each refresh token works
@@ -249,10 +289,25 @@ fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials
     })
 }
 
-fn request_device_authorization(host: &str) -> Result<Value> {
+/// Writebooks from before read-only sign-ins leave the scope out, and give
+/// full access.
+fn access_from(body: &Value) -> Access {
+    if body["scope"].as_str() == Some("read") {
+        Access::ReadOnly
+    } else {
+        Access::Full
+    }
+}
+
+fn request_device_authorization(host: &str, access: Access) -> Result<Value> {
+    let scope = match access {
+        Access::Full => "read write",
+        Access::ReadOnly => "read",
+    };
+
     let mut response = api::agent()
         .post(&format!("{host}/oauth/device_authorizations"))
-        .send_form([("client_id", CLIENT_ID)])
+        .send_form([("client_id", CLIENT_ID), ("scope", scope)])
         .with_context(|| format!("could not reach {host}"))?;
 
     if response.status() != 200 {
@@ -278,6 +333,7 @@ fn credentials_from(body: &Value) -> Result<Credentials> {
         access_token: string_field(body, "access_token")?,
         refresh_token: string_field(body, "refresh_token")?,
         expires_at: now() + body["expires_in"].as_u64().unwrap_or(3600),
+        access: access_from(body),
     })
 }
 

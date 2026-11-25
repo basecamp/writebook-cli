@@ -26,6 +26,8 @@ Sign in to your Writebook. The CLI prints a link to approve in the browser:
 writebook instance add https://books.example.com
 ```
 
+Add `--read-only` if this device only needs to read books.
+
 Find a book and read it:
 
 ```sh
