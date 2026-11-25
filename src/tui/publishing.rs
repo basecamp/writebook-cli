@@ -75,7 +75,7 @@ impl Publishing {
                 }
                 KeyCode::Char('c') if self.published => return Action::Copy(self.url.clone()),
                 KeyCode::Char('q') if self.published => self.qr = !self.qr,
-                KeyCode::Char('e') => self.editing = Some(self.slug.clone()),
+                KeyCode::Char('e') if !self.saving => self.editing = Some(self.slug.clone()),
                 _ => {}
             },
         }

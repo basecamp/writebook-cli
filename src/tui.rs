@@ -349,9 +349,9 @@ impl App {
 
         if self.overlay.is_none()
             && let Screen::Leaf(page, _) = &mut self.screen
-            && let Some(editor) = &mut page.editor
+            && page.editor.is_some()
         {
-            editor.paste(text);
+            page.paste(text);
         } else if self.typing() {
             for character in views::one_line(text).chars() {
                 let key = KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE);
@@ -653,6 +653,16 @@ mod tests {
     }
 
     #[test]
+    fn pasting_while_a_page_saves_changes_nothing() {
+        let mut app = App::new(Images::none());
+        app.screen = editing_page(1);
+        leaf_page(&mut app).saving = true;
+
+        app.paste("too late");
+        assert_eq!(edited_body(&app), "");
+    }
+
+    #[test]
     fn books_load_while_settings_are_open_over_them() {
         let mut app = App::new(Images::none());
         let mut books = Books::new(HOST.to_string(), "books.example.com".to_string());
@@ -689,6 +699,15 @@ mod tests {
         let Some(Overlay::Publishing(publishing)) = &mut app.overlay else { panic!("the overlay is gone") };
         assert!(matches!(publishing.key(press(KeyCode::Char('c'))), publishing::Action::Copy(_)));
         assert!(matches!(&app.screen, Screen::Book(page) if page.book.ready().unwrap().published));
+    }
+
+    #[test]
+    fn publishing_blocks_editing_the_address_while_saving() {
+        let mut publishing = Publishing::new(HOST, next_id(), &book());
+
+        assert!(matches!(publishing.key(press(KeyCode::Down)), publishing::Action::Request(_)));
+        publishing.key(press(KeyCode::Char('e')));
+        assert!(!publishing.typing());
     }
 
     #[test]

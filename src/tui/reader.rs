@@ -128,6 +128,16 @@ impl LeafPage {
         }
     }
 
+    /// Pasted text goes into the editor as it is, but not while the page is
+    /// saving what was in it.
+    pub fn paste(&mut self, text: &str) {
+        if !self.saving
+            && let Some(editor) = &mut self.editor
+        {
+            editor.paste(text);
+        }
+    }
+
     /// Save the page, once every file uploading into it is in.
     fn save(&mut self) -> Action {
         if self.uploads > 0 {
