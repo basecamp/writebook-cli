@@ -327,9 +327,7 @@ fn main() {
     // Die quietly on a closed pipe (`writebook skill print | head`) instead
     // of panicking, the way every other Unix CLI does.
     #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
+    sigpipe::reset();
 
     if let Err(error) = run(Cli::parse()) {
         eprintln!("error: {}", output::terminal_safe(&format!("{error:#}")));

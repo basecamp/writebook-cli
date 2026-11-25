@@ -135,7 +135,9 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     let config = tempdir();
     let folder = config.join("writebook");
     std::fs::create_dir(&folder).unwrap();
-    assert_ne!(access_list(&folder), owner_only_access_list());
+    let everyone = std::process::Command::new("icacls").arg(&folder).args(["/grant", "*S-1-1-0:(OI)(CI)R"]).output().unwrap();
+    assert!(everyone.status.success());
+    assert!(access_list(&folder).contains("Everyone Allow"), "{}", access_list(&folder));
 
     sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
 
