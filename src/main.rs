@@ -133,24 +133,23 @@ enum Command {
     /// Upgrade writebook to the latest release
     #[usage(help_heading = "Setup commands")]
     Upgrade,
-    /// Serve an instance's books to MCP clients. On stdio it uses your
-    /// sign-in, for a client on this machine: `claude mcp add writebook --
-    /// writebook mcp`. With --server it listens on HTTP at /mcp and doesn't
-    /// use your login: every request must include a Writebook token as a
-    /// Bearer header, and that token is only sent to this instance. It serves
-    /// plain HTTP, so put it behind https unless it only listens on this
-    /// machine
+    /// Let agents read and edit books on every instance you added, through
+    /// MCP: `claude mcp add writebook -- writebook mcp`. With --serve it gives
+    /// anyone's agent access to one instance over HTTP at /mcp, using their own
+    /// login: every request must include a Writebook token as a Bearer header.
+    /// It serves plain HTTP, so put it behind https unless it only listens on
+    /// this machine
     #[usage(help_heading = "Agent commands")]
     Mcp {
-        /// Instance alias or URL (defaults to the default instance)
+        /// With --serve, the instance alias or URL to serve (defaults to the default instance)
         #[usage(long)]
         instance: Option<String>,
         /// Serve only the tools that read
         #[usage(long)]
         read_only: bool,
-        /// Listen on HTTP at this address, like 127.0.0.1:8080, instead of stdio
+        /// Serve over HTTP at this address, like 127.0.0.1:8080, instead of stdio
         #[usage(long)]
-        server: Option<String>,
+        serve: Option<String>,
     },
     /// Print or install the agent skill for coding agents
     #[usage(help_heading = "Agent commands")]
@@ -379,7 +378,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Search { query, book, instance, json, markdown, jq } => {
             read::search(&query, book.as_deref(), instance.as_deref(), Format::from_flags(json, markdown, jq)?)
         }
-        Command::Mcp { instance, read_only, server } => mcp::run(instance.as_deref(), read_only, server.as_deref()),
+        Command::Mcp { instance, read_only, serve } => mcp::run(instance.as_deref(), read_only, serve.as_deref()),
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),

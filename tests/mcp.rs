@@ -1,5 +1,5 @@
-//! `writebook mcp`: a book's pages as MCP tools, on stdio with your sign-in,
-//! and over HTTP with each caller's own token.
+//! `writebook mcp`: books as MCP tools, on stdio for every instance you
+//! added, and over HTTP for one instance with each caller's token.
 
 mod support;
 
@@ -15,7 +15,13 @@ fn reads_and_changes_pages_on_stdio() {
 
     let tools = mcp.request("tools/list", json!({}));
     let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|it| it["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["list_books", "book_contents", "read_book", "read_page", "search", "create_page", "update_page", "create_section"]);
+    assert_eq!(
+        names,
+        ["list_instances", "list_books", "book_contents", "read_book", "read_page", "search", "create_page", "update_page", "create_section"]
+    );
+
+    let instances = mcp.call("list_instances", json!({}));
+    assert_eq!(instances, json!([{ "alias": "handbook", "url": server.url, "default": true, "can_change_books": true }]));
 
     let page = mcp.call("read_page", json!({ "book_id": 4, "page_id": 12 }));
     assert_eq!(page, json!({ "id": 12, "type": "page", "title": "On call", "markdown": "Call someone.", "fingerprint": "g" }));
@@ -39,7 +45,7 @@ fn a_read_only_token_gets_only_the_tools_that_read() {
 
     let tools = mcp.request("tools/list", json!({}));
     let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|it| it["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["list_books", "book_contents", "read_book", "read_page", "search"]);
+    assert_eq!(names, ["list_instances", "list_books", "book_contents", "read_book", "read_page", "search"]);
 
     let refused = mcp.call_failing("create_page", json!({ "book_id": 4, "title": "New", "markdown": "" }));
     assert!(refused.contains("read-only"), "{refused}");
@@ -47,13 +53,38 @@ fn a_read_only_token_gets_only_the_tools_that_read() {
 }
 
 #[test]
-fn needs_a_sign_in_on_stdio() {
+fn reaches_the_instance_a_tool_names() {
     let server = fake_writebook();
+    let other = fake_writebook();
+    let mut mcp = Mcp::start(&server, "wb_at_secret");
+    std::fs::write(
+        mcp.config.join("writebook/instances.toml"),
+        format!(
+            "default = \"handbook\"\n[instances.handbook]\nurl = \"{}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n\
+             [instances.other]\nurl = \"{}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n",
+            server.url, other.url
+        ),
+    )
+    .unwrap();
 
-    let output = support::writebook(&["mcp", "--instance", &server.url], &[]);
+    mcp.call("search", json!({ "query": "call" }));
+    assert!(server.requests().iter().any(|it| it.path.starts_with("/search.json")));
+
+    // WRITEBOOK_TOKEN is for handbook alone, so other is never sent it.
+    let elsewhere = mcp.call_failing("search", json!({ "query": "call", "instance": "other" }));
+    assert!(elsewhere.contains(&format!("so it is not sent to {}", other.url)), "{elsewhere}");
+    assert!(other.requests().is_empty());
+
+    let unknown = mcp.call_failing("list_books", json!({ "instance": "nope" }));
+    assert!(unknown.contains("there is no instance 'nope'"), "{unknown}");
+}
+
+#[test]
+fn needs_an_instance_on_stdio() {
+    let output = support::writebook(&["mcp"], &[]);
 
     assert!(!output.status.success());
-    assert!(support::stderr(&output).contains("there isn't one. Sign in with `writebook instance add"), "{}", support::stderr(&output));
+    assert!(support::stderr(&output).contains("there are no instances to serve"), "{}", support::stderr(&output));
 }
 
 #[test]
@@ -61,7 +92,7 @@ fn serves_each_http_caller_with_their_own_token() {
     let server = fake_writebook();
     let config = tempdir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_writebook"))
-        .args(["mcp", "--instance", &server.url, "--server", "127.0.0.1:0"])
+        .args(["mcp", "--instance", &server.url, "--serve", "127.0.0.1:0"])
         .env_remove("WRITEBOOK_TOKEN")
         .env("XDG_CONFIG_HOME", &config)
         .env("WRITEBOOK_NO_KEYRING", "1")
@@ -78,6 +109,8 @@ fn serves_each_http_caller_with_their_own_token() {
     assert_eq!(anonymous.0, 401);
 
     post(&endpoint, Some("wb_at_alice"), &initialize());
+    let (_, tools) = post(&endpoint, Some("wb_at_alice"), &json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list" }));
+    assert!(!tools.contains("list_instances") && !tools.contains("\"instance\""), "{tools}");
     let (status, answer) = post(
         &endpoint,
         Some("wb_at_alice"),
@@ -103,6 +136,7 @@ fn serves_each_http_caller_with_their_own_token() {
 fn fake_writebook() -> Server {
     Server::start(|request| match (request.method.as_str(), request.path.as_str()) {
         _ if request.header("Authorization") == Some("Bearer wb_at_revoked") => reply(401, ""),
+        ("GET", path) if path.starts_with("/search.json") => reply(200, r#"{"results":[]}"#),
         ("GET", "/books.json") => {
             reply(200, r#"[{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","slug":"handbook","url":"http://books.test/4/handbook"}]"#)
         }
@@ -118,8 +152,10 @@ fn fake_writebook() -> Server {
     })
 }
 
-/// `writebook mcp` on stdio, signed in with the given WRITEBOOK_TOKEN.
+/// `writebook mcp` on stdio, with the server added as the instance
+/// "handbook", signed in with the given WRITEBOOK_TOKEN.
 struct Mcp {
+    config: std::path::PathBuf,
     child: Child,
     output: BufReader<ChildStdout>,
     next_id: u64,
@@ -127,11 +163,19 @@ struct Mcp {
 
 impl Mcp {
     fn start(server: &Server, token: &str) -> Mcp {
+        let config = tempdir();
+        std::fs::create_dir_all(config.join("writebook")).unwrap();
+        std::fs::write(
+            config.join("writebook/instances.toml"),
+            format!("default = \"handbook\"\n[instances.handbook]\nurl = \"{}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n", server.url),
+        )
+        .unwrap();
+
         let mut child = Command::new(env!("CARGO_BIN_EXE_writebook"))
-            .args(["mcp", "--instance", &server.url])
+            .args(["mcp"])
             .env("WRITEBOOK_TOKEN", token)
             .env("WRITEBOOK_TOKEN_HOST", &server.url)
-            .env("XDG_CONFIG_HOME", tempdir())
+            .env("XDG_CONFIG_HOME", &config)
             .env("WRITEBOOK_NO_KEYRING", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -139,7 +183,7 @@ impl Mcp {
             .spawn()
             .unwrap();
         let output = BufReader::new(child.stdout.take().unwrap());
-        let mut mcp = Mcp { child, output, next_id: 1 };
+        let mut mcp = Mcp { config, child, output, next_id: 1 };
 
         let params = initialize()["params"].clone();
         mcp.request("initialize", params);

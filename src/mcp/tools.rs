@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use super::Connection;
 use crate::api::ApiError;
-use crate::{read, sync};
+use crate::inventory::Inventory;
+use crate::{creds, read, sync};
 
 struct Spec {
     name: &'static str,
@@ -17,6 +18,12 @@ struct Spec {
 }
 
 const SPECS: &[Spec] = &[
+    Spec {
+        name: "list_instances",
+        description: "List the Writebook instances you added, which one is the default, and whether your sign-in to each can change books.",
+        schema: || json!({ "type": "object", "properties": {} }),
+        changes_books: false,
+    },
     Spec {
         name: "list_books",
         description: "List the books you can read, with their ids, titles, authors and URLs.",
@@ -124,12 +131,22 @@ fn page_id() -> Value {
     json!({ "type": "integer", "description": "The page's, section's or picture's id, from book_contents" })
 }
 
-pub fn list(read_only: bool) -> Vec<Tool> {
+/// The tools served. From the inventory, each takes the instance to use, and
+/// list_instances lists them; a served instance is the only one there is.
+pub fn list(read_only: bool, inventory: bool) -> Vec<Tool> {
     SPECS
         .iter()
         .filter(|spec| !(read_only && spec.changes_books))
+        .filter(|spec| inventory || spec.name != "list_instances")
         .map(|spec| {
-            let Value::Object(schema) = (spec.schema)() else { unreachable!("every schema is an object") };
+            let mut schema = (spec.schema)();
+
+            if inventory && spec.name != "list_instances" {
+                schema["properties"]["instance"] =
+                    json!({ "type": "string", "description": "Alias or URL from list_instances (defaults to the default instance)" });
+            }
+
+            let Value::Object(schema) = schema else { unreachable!("every schema is an object") };
             let annotations = ToolAnnotations::new().read_only(!spec.changes_books).destructive(false).open_world(false);
 
             Tool::new(spec.name, spec.description, Arc::new(schema)).annotate(annotations)
@@ -137,14 +154,31 @@ pub fn list(read_only: bool) -> Vec<Tool> {
         .collect()
 }
 
-pub fn call(name: &str, arguments: &JsonObject, connection: &Connection, read_only: bool) -> Result<Value> {
-    let Some(spec) = SPECS.iter().find(|spec| spec.name == name) else {
+/// Run a tool. A served instance comes with the caller's connection; without
+/// one, the tool reaches the instance it names.
+pub fn call(name: &str, arguments: &JsonObject, served: Option<Connection>, read_only: bool) -> Result<Value> {
+    let Some(spec) = SPECS.iter().find(|spec| spec.name == name).filter(|spec| served.is_none() || spec.name != "list_instances") else {
         bail!("there is no tool {name}");
     };
 
     if read_only && spec.changes_books {
         bail!("this server is read-only, so {name} isn't served");
     }
+
+    if name == "list_instances" {
+        return instances();
+    }
+
+    let connection = match served {
+        Some(connection) => connection,
+        None => Connection::to_instance(optional_text(arguments, "instance")?.as_deref())?,
+    };
+
+    if spec.changes_books {
+        connection.ensure_can_write()?;
+    }
+
+    let connection = &connection;
 
     match name {
         "list_books" => Ok(json!(read::list_books(&connection.web()?)?)),
@@ -157,6 +191,22 @@ pub fn call(name: &str, arguments: &JsonObject, connection: &Connection, read_on
         "create_section" => create_section(connection, arguments),
         _ => unreachable!("every tool is called"),
     }
+}
+
+fn instances() -> Result<Value> {
+    let inventory = Inventory::load()?;
+    let mut instances = Vec::new();
+
+    for (alias, instance) in &inventory.instances {
+        instances.push(json!({
+            "alias": alias,
+            "url": instance.url,
+            "default": inventory.default.as_ref() == Some(alias),
+            "can_change_books": creds::can_write(&instance.url)?,
+        }));
+    }
+
+    Ok(Value::Array(instances))
 }
 
 fn read_page(connection: &Connection, book_id: u64, page_id: u64) -> Result<Value> {
@@ -254,6 +304,13 @@ fn created(response: &Value) -> Value {
 fn number(arguments: &JsonObject, name: &str) -> Result<u64> {
     let value = arguments.get(name).with_context(|| format!("{name} is missing"))?;
     value.as_u64().or_else(|| value.as_str()?.parse().ok()).with_context(|| format!("{name} must be a whole number"))
+}
+
+fn optional_text(arguments: &JsonObject, name: &str) -> Result<Option<String>> {
+    match arguments.get(name) {
+        Some(_) => text(arguments, name).map(Some),
+        None => Ok(None),
+    }
 }
 
 fn text(arguments: &JsonObject, name: &str) -> Result<String> {
