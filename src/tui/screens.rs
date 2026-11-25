@@ -345,8 +345,11 @@ impl App {
         self.reload_book();
     }
 
-    pub fn form_loaded(&mut self, form: Result<BookForm>) {
-        if let Screen::Edit(page, _) = &mut self.screen {
+    pub fn form_loaded(&mut self, host: String, book_id: Option<u64>, form: Result<BookForm>) {
+        if let Screen::Edit(page, _) = &mut self.screen
+            && page.host == host
+            && page.book_id == book_id
+        {
             page.form = Loading::from(form);
 
             if let Some(cover) = page.form.ready().and_then(|it| it.cover.clone()) {
@@ -417,13 +420,20 @@ impl App {
         }
     }
 
-    pub fn uploaded(&mut self, result: Result<String>) {
+    /// Put an uploaded file into the editor of the page it was uploaded for,
+    /// if that's still open.
+    pub fn uploaded(&mut self, host: String, book_id: u64, leaf_id: u64, result: Result<String>) {
         match result {
             Ok(markdown) => {
                 if let Screen::Leaf(page, _) = &mut self.screen
+                    && page.host == host
+                    && page.book_id == book_id
+                    && page.leaf().id == leaf_id
                     && let Some(editor) = &mut page.editor
                 {
                     editor.insert_block(&markdown);
+                } else {
+                    self.notice = Some("Uploaded, but the page it was for isn't being edited any more.".to_string());
                 }
             }
             Err(error) => self.show_error(error),

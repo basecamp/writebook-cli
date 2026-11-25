@@ -58,7 +58,10 @@ impl EditPage {
         let host = self.host.clone();
         let book_id = self.book_id;
 
-        Box::new(move || Message::Form(data::book_form(&host, book_id)))
+        Box::new(move || {
+            let form = data::book_form(&host, book_id);
+            Message::Form(host, book_id, form)
+        })
     }
 
     /// Why the book can't be saved as it is.

@@ -85,13 +85,16 @@ pub enum Message {
     Image(String, Result<image::DynamicImage>),
     Changed(Result<()>),
     Published(Result<Publication>),
-    Form(Result<BookForm>),
+    /// The form for the book with this id on this host, or for a new book.
+    Form(String, Option<u64>, Result<BookForm>),
     Saved(Result<u64>),
     BookDeleted(Result<()>),
-    Found(Result<Vec<data::Found>>),
+    /// What a search on a host, in a book or every book, found for a query.
+    Found(String, Option<u64>, String, Result<Vec<data::Found>>),
     LeafLoaded(u64, u64, Result<data::LeafContent>),
     LeafSaved(Result<String>),
-    Uploaded(Result<String>),
+    /// The Markdown for a file uploaded into a page on a host and book.
+    Uploaded(String, u64, u64, Result<String>),
     People(String, Result<data::People>),
     PeopleChanged(Result<()>),
     InviteReset(Result<String>),
@@ -314,13 +317,13 @@ impl App {
             Message::Book(host, book_id, book) => self.book_loaded(host, book_id, book),
             Message::Changed(result) => self.book_changed(result),
             Message::Published(result) => self.published(result),
-            Message::Form(form) => self.form_loaded(form),
+            Message::Form(host, book_id, form) => self.form_loaded(host, book_id, form),
             Message::Saved(result) => self.saved(result),
             Message::BookDeleted(result) => self.book_deleted(result),
-            Message::Found(found) => self.found(found),
+            Message::Found(host, book_id, query, found) => self.found(host, book_id, query, found),
             Message::LeafLoaded(book_id, leaf_id, content) => self.leaf_loaded(book_id, leaf_id, content),
             Message::LeafSaved(result) => self.leaf_saved(result),
-            Message::Uploaded(result) => self.uploaded(result),
+            Message::Uploaded(host, book_id, leaf_id, result) => self.uploaded(host, book_id, leaf_id, result),
             Message::People(host, people) => self.people_loaded(host, people),
             Message::PeopleChanged(result) => self.people_changed(result),
             Message::InviteReset(result) => self.invite_reset(result),
@@ -397,6 +400,81 @@ mod tests {
         app.key(ctrl_c());
         app.key(ctrl_c());
         assert!(app.done);
+    }
+
+    const HOST: &str = "https://books.example.com";
+
+    fn form(id: Option<u64>, title: &str) -> BookForm {
+        BookForm {
+            id,
+            title: title.to_string(),
+            subtitle: String::new(),
+            author: String::new(),
+            theme: "blue".to_string(),
+            everyone: false,
+            cover: None,
+            new_cover: None,
+            remove_cover: false,
+            members: Vec::new(),
+        }
+    }
+
+    fn leaf(id: u64) -> data::Leaf {
+        data::Leaf { id, kind: "Page".to_string(), title: format!("Page {id}"), word_count: None, preview: None, image: None }
+    }
+
+    fn editing_page(leaf_id: u64) -> Screen {
+        let books = Books::new(HOST.to_string(), "books.example.com".to_string());
+        let book = data::Book {
+            id: 1,
+            title: "Handbook".to_string(),
+            subtitle: None,
+            author: None,
+            theme: None,
+            cover: None,
+            slug: "handbook".to_string(),
+            published: false,
+            editable: true,
+            leaves: vec![leaf(1), leaf(2)],
+        };
+        let index = book.leaves.iter().position(|it| it.id == leaf_id).unwrap();
+        let mut page = LeafPage::new(HOST.to_string(), 1, &book, index);
+        page.editor = Some(editor::Editor::new("Page", ""));
+        Screen::Leaf(Box::new(page), Box::new(BookPage::new(books, 1)))
+    }
+
+    fn edited_body(app: &App) -> String {
+        match &app.screen {
+            Screen::Leaf(page, _) => page.editor.as_ref().unwrap().body(),
+            _ => panic!("not on a page"),
+        }
+    }
+
+    #[test]
+    fn a_form_for_another_book_doesnt_fill_in_the_new_book() {
+        let mut app = App::new(Images::none());
+        let page = EditPage::new(HOST.to_string(), "books.example.com".to_string(), None);
+        app.screen = Screen::Edit(Box::new(page), Box::new(Screen::Instances(InstancePicker::new(0))));
+
+        app.receive(Message::Form(HOST.to_string(), Some(9), Ok(form(Some(9), "Someone else's"))));
+        app.receive(Message::Form("https://other.example.com".to_string(), None, Ok(form(None, "Elsewhere"))));
+        assert!(matches!(&app.screen, Screen::Edit(page, _) if matches!(page.form, Loading::Pending)));
+
+        app.receive(Message::Form(HOST.to_string(), None, Ok(form(None, ""))));
+        assert!(matches!(&app.screen, Screen::Edit(page, _) if page.form.ready().is_some_and(|it| it.id.is_none())));
+    }
+
+    #[test]
+    fn an_upload_goes_only_into_the_page_it_was_for() {
+        let mut app = App::new(Images::none());
+        app.screen = editing_page(2);
+
+        app.receive(Message::Uploaded(HOST.to_string(), 1, 1, Ok("![a.png](/a.png)".to_string())));
+        assert_eq!(edited_body(&app), "");
+        assert!(app.notice.is_some());
+
+        app.receive(Message::Uploaded(HOST.to_string(), 1, 2, Ok("![b.png](/b.png)".to_string())));
+        assert!(edited_body(&app).contains("![b.png](/b.png)"));
     }
 
     #[test]

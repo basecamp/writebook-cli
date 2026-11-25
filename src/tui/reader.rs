@@ -173,8 +173,13 @@ impl LeafPage {
     pub fn upload(&self, path: std::path::PathBuf) -> Option<Request> {
         let record_gid = self.content.ready().and_then(|it| it.record_gid.clone())?;
         let host = self.host.clone();
+        let book_id = self.book_id;
+        let leaf_id = self.leaf().id;
 
-        Some(Box::new(move || Message::Uploaded(data::upload(&host, &record_gid, &path))))
+        Some(Box::new(move || {
+            let markdown = data::upload(&host, &record_gid, &path);
+            Message::Uploaded(host, book_id, leaf_id, markdown)
+        }))
     }
 
     /// The images a page shows, to fetch.

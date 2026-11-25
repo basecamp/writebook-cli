@@ -11,7 +11,7 @@ use super::confirm::Question;
 use super::data::{self, Found, Publication};
 use super::files::{self, FilePicker, Picked};
 use super::help::Binding;
-use super::{App, Loading, Message, Overlay, Purpose, Screen, instances, publishing, reader, search};
+use super::{App, Message, Overlay, Purpose, Screen, instances, publishing, reader, search};
 
 impl Overlay {
     /// Whether keys go into a text field, where ? is just a character.
@@ -194,7 +194,10 @@ impl App {
     fn search(&self, book_id: Option<u64>, query: String) {
         if let Some(host) = self.screen.host() {
             let host = host.to_string();
-            self.spawn(move || Message::Found(data::search(&host, book_id, &query)));
+            self.spawn(move || {
+                let found = data::search(&host, book_id, &query);
+                Message::Found(host, book_id, query, found)
+            });
         }
     }
 
@@ -280,9 +283,11 @@ impl App {
         }
     }
 
-    pub fn found(&mut self, found: Result<Vec<Found>>) {
-        if let Some(Overlay::Search(search)) = &mut self.overlay {
-            search.results = Some(Loading::from(found));
+    pub fn found(&mut self, host: String, book_id: Option<u64>, query: String, found: Result<Vec<Found>>) {
+        if let Some(Overlay::Search(search)) = &mut self.overlay
+            && self.screen.host() == Some(host.as_str())
+        {
+            search.arrived(book_id, &query, found);
         }
     }
 }

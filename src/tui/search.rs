@@ -55,24 +55,35 @@ impl Search {
         Action::Nothing
     }
 
-    /// Enter searches for what's typed, or opens the selected page once the
-    /// results are for what's typed.
+    /// Enter searches for what's typed, again when that search failed, or
+    /// opens the selected page once the results are for what's typed.
     fn enter(&mut self) -> Action {
         let query = self.query.trim().to_string();
+        let failed = matches!(self.results, Some(Loading::Failed(_)));
 
         if query.is_empty() {
             Action::Nothing
-        } else if self.searched.as_deref() == Some(&query) {
-            match self.found().and_then(|it| it.get(self.selected)) {
-                Some(found) => Action::Open(found.clone()),
-                None => Action::Nothing,
-            }
-        } else {
+        } else if self.searched.as_deref() != Some(&query) || failed {
             self.searched = Some(query.clone());
             self.results = Some(Loading::Pending);
             self.selected = 0;
             self.offset = 0;
             Action::Search(query)
+        } else {
+            match self.found().and_then(|it| it.get(self.selected)) {
+                Some(found) => Action::Open(found.clone()),
+                None => Action::Nothing,
+            }
+        }
+    }
+
+    /// Show what a search found, unless it was for another book or for words
+    /// searched before the last ones.
+    pub fn arrived(&mut self, book_id: Option<u64>, query: &str, found: anyhow::Result<Vec<Found>>) {
+        if self.book_id == book_id && self.searched.as_deref() == Some(query) {
+            self.results = Some(Loading::from(found));
+            let count = self.found().map(<[Found]>::len).unwrap_or(0);
+            self.selected = self.selected.min(count.saturating_sub(1));
         }
     }
 
@@ -210,12 +221,42 @@ mod tests {
         }
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbit"));
 
-        search.results = Some(Loading::Ready(vec![found("Introduction"), found("Getting Around")]));
+        search.arrived(Some(2), "rabbit", Ok(vec![found("Introduction"), found("Getting Around")]));
         search.key(press(KeyCode::Down));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Open(found) if found.title == "Getting Around"));
 
         search.key(press(KeyCode::Char('s')));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbits"));
         assert!(matches!(search.key(press(KeyCode::Esc)), Action::Close));
+    }
+
+    #[test]
+    fn drops_results_for_words_searched_before_and_keeps_the_selection_on_a_result() {
+        let mut search = Search::new(Some(2), "The Trail Guide".to_string());
+        search.query = "rabbit".to_string();
+        search.key(press(KeyCode::Enter));
+        search.arrived(Some(2), "rabbit", Ok(vec![found("Introduction"), found("Getting Around"), found("Maps")]));
+        search.key(press(KeyCode::Down));
+        search.key(press(KeyCode::Down));
+
+        search.query = "hole".to_string();
+        search.key(press(KeyCode::Enter));
+        search.arrived(Some(2), "rabbit", Ok(vec![found("Introduction")]));
+        search.arrived(None, "hole", Ok(vec![found("Introduction")]));
+        assert!(matches!(search.results, Some(Loading::Pending)));
+
+        search.arrived(Some(2), "hole", Ok(vec![found("Down the hole")]));
+        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Open(found) if found.title == "Down the hole"));
+    }
+
+    #[test]
+    fn enter_searches_again_after_a_search_fails() {
+        let mut search = Search::new(None, "every book".to_string());
+        search.query = "rabbit".to_string();
+        search.key(press(KeyCode::Enter));
+        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Nothing), "still searching");
+
+        search.arrived(None, "rabbit", Err(anyhow::anyhow!("offline")));
+        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbit"));
     }
 }
