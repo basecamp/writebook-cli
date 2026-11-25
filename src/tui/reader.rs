@@ -25,9 +25,16 @@ pub struct LeafPage {
     pub leaves: Vec<Leaf>,
     pub index: usize,
     pub content: Loading<LeafContent>,
+    /// The page's Markdown as rows, for the width they were rendered at.
+    rendered: Option<Rendered>,
     pub scroll: usize,
     pub editor: Option<Editor>,
     pub saving: bool,
+}
+
+struct Rendered {
+    width: u16,
+    rows: Vec<Row>,
 }
 
 /// What a key on the page asks the app to do.
@@ -63,6 +70,7 @@ impl LeafPage {
             leaves: book.leaves.clone(),
             index,
             content: Loading::Pending,
+            rendered: None,
             scroll: 0,
             editor: None,
             saving: false,
@@ -78,6 +86,11 @@ impl LeafPage {
             let content = data::leaf(&host, book_id, &leaf);
             Message::LeafLoaded(book_id, leaf.id, content)
         })
+    }
+
+    pub fn loaded(&mut self, content: anyhow::Result<LeafContent>) {
+        self.content = Loading::from(content);
+        self.rendered = None;
     }
 
     pub fn leaf(&self) -> &Leaf {
@@ -149,6 +162,7 @@ impl LeafPage {
     fn turn_to(&mut self, index: usize) -> Request {
         self.index = index;
         self.content = Loading::Pending;
+        self.rendered = None;
         self.scroll = 0;
         self.load()
     }
@@ -165,6 +179,7 @@ impl LeafPage {
             content.body = editor.body();
             content.fingerprint = fingerprint;
             self.leaves[self.index].title = editor.title;
+            self.rendered = None;
         }
     }
 
@@ -239,87 +254,109 @@ impl LeafPage {
             return editor.draw(frame, area);
         }
 
-        let content = match &self.content {
-            Loading::Ready(content) => content.clone(),
-            Loading::Pending => return views::placeholder(frame, area, "Loading…"),
-            Loading::Failed(error) => return views::failure(frame, area, error),
-        };
-
-        let leaf = self.leaf().clone();
         let column = reading_column(area);
 
-        if leaf.is_picture() {
-            self.draw_picture(frame, area, &content, images);
-        } else if leaf.is_section() {
-            self.draw_section(frame, column, &content);
-        } else {
-            self.draw_page(frame, column, &content, images);
-        }
+        match &self.content {
+            Loading::Pending => views::placeholder(frame, area, "Loading…"),
+            Loading::Failed(error) => views::failure(frame, area, error),
+            Loading::Ready(content) => {
+                if self.leaves[self.index].is_picture() {
+                    draw_picture(frame, area, content, images);
+                } else if self.leaves[self.index].is_section() {
+                    draw_section(frame, column, content);
+                } else {
+                    if self.rendered.as_ref().is_none_or(|it| it.width != column.width) {
+                        self.rendered = Some(Rendered { width: column.width, rows: markdown::render(&content.body, column.width) });
+                    }
 
-        let position = format!("{} of {}", self.index + 1, self.leaves.len());
-        let corner = Rect { y: area.bottom().saturating_sub(1), height: 1, ..area };
-        frame.render_widget(Paragraph::new(Line::from(position).dim()).alignment(Alignment::Right), corner);
-    }
-
-    fn draw_page(&mut self, frame: &mut Frame, area: Rect, content: &LeafContent, images: &mut Images) {
-        let rows = markdown::render(&content.body, area.width);
-
-        let heights: Vec<u16> = rows.iter().map(row_height).collect();
-        let total: usize = heights.iter().map(|it| usize::from(*it)).sum();
-        self.scroll = self.scroll.min(total.saturating_sub(usize::from(area.height)));
-
-        let mut skipped = 0;
-        let mut y = area.y;
-
-        for (row, height) in rows.iter().zip(heights) {
-            if skipped + usize::from(height) <= self.scroll {
-                skipped += usize::from(height);
-                continue;
-            }
-
-            if y >= area.bottom() {
-                break;
-            }
-
-            let room = Rect { y, height: height.min(area.bottom() - y), ..area };
-
-            match row {
-                Row::Text(line) => frame.render_widget(Paragraph::new(line.clone()), room),
-                Row::Image { url } if room.height == height => {
-                    if !images.draw_left(frame, room, url) {
-                        frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()), room);
+                    if let Some(rendered) = &self.rendered {
+                        self.scroll = draw_rows(frame, column, &rendered.rows, self.scroll, images);
                     }
                 }
-                Row::Image { .. } => {}
+
+                let position = format!("{} of {}", self.index + 1, self.leaves.len());
+                let corner = Rect { y: area.bottom().saturating_sub(1), height: 1, ..area };
+                frame.render_widget(Paragraph::new(Line::from(position).dim()).alignment(Alignment::Right), corner);
             }
+        }
+    }
+}
 
-            y += height;
+/// Draw the page's rows scrolled down by `scroll` lines, as far as they go.
+/// Returns the scroll, kept from going past the end.
+fn draw_rows(frame: &mut Frame, area: Rect, rows: &[Row], scroll: usize, images: &mut Images) -> usize {
+    let heights: Vec<u16> = rows.iter().map(row_height).collect();
+    let total: usize = heights.iter().map(|it| usize::from(*it)).sum();
+    let scroll = scroll.min(total.saturating_sub(usize::from(area.height)));
+
+    for shown in visible_rows(&heights, scroll, usize::from(area.height)) {
+        let room = Rect { y: area.y + shown.y as u16, height: shown.height as u16, ..area };
+
+        match &rows[shown.index] {
+            Row::Text(line) => frame.render_widget(Paragraph::new(line.clone()), room),
+            Row::Image { url } if shown.height == usize::from(markdown::IMAGE_HEIGHT) => {
+                if !images.draw_left(frame, room, url) {
+                    frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()), room);
+                }
+            }
+            Row::Image { .. } => {}
         }
     }
 
-    fn draw_picture(&self, frame: &mut Frame, area: Rect, content: &LeafContent, images: &mut Images) {
-        let picture = Rect { height: area.height.saturating_sub(3), ..area };
-        let shown = match &content.image {
-            Some(url) => images.draw(frame, centered_image(picture), url),
-            None => false,
-        };
+    scroll
+}
 
-        if !shown {
-            frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()).alignment(Alignment::Center), Rect { y: picture.y + picture.height / 2, height: 1, ..picture });
+/// A row with some of it on the screen: which row, the line it starts on,
+/// and how many of its lines show.
+#[derive(Debug, PartialEq)]
+struct Shown {
+    index: usize,
+    y: usize,
+    height: usize,
+}
+
+/// The rows of these heights that show in `height` lines scrolled down by
+/// `scroll`, a row cut off at the top taking only the lines left of it.
+fn visible_rows(heights: &[u16], scroll: usize, height: usize) -> Vec<Shown> {
+    let mut shown = Vec::new();
+    let mut top = 0;
+
+    for (index, row_height) in heights.iter().map(|it| usize::from(*it)).enumerate() {
+        let bottom = top + row_height;
+
+        if bottom > scroll && top < scroll + height {
+            let y = top.saturating_sub(scroll);
+            let visible = bottom.min(scroll + height) - top.max(scroll);
+            shown.push(Shown { index, y, height: visible });
         }
 
-        let caption = Rect { y: area.bottom().saturating_sub(2), height: 1, ..area };
-        frame.render_widget(Paragraph::new(Line::from(content.body.clone()).italic()).alignment(Alignment::Center), caption);
+        top = bottom;
     }
 
-    fn draw_section(&self, frame: &mut Frame, area: Rect, content: &LeafContent) {
-        let lines: Vec<Line> = content.body.lines().map(|line| Line::from(line.to_string())).collect();
+    shown
+}
 
-        let height = (lines.len() as u16 + 2).min(area.height);
-        let middle = Rect { y: area.y + (area.height - height) / 2, height, ..area };
-        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true }), middle);
+fn draw_picture(frame: &mut Frame, area: Rect, content: &LeafContent, images: &mut Images) {
+    let picture = Rect { height: area.height.saturating_sub(3), ..area };
+    let shown = match &content.image {
+        Some(url) => images.draw(frame, centered_image(picture), url),
+        None => false,
+    };
+
+    if !shown {
+        frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()).alignment(Alignment::Center), Rect { y: picture.y + picture.height / 2, height: 1, ..picture });
     }
 
+    let caption = Rect { y: area.bottom().saturating_sub(2), height: 1, ..area };
+    frame.render_widget(Paragraph::new(Line::from(content.body.clone()).italic()).alignment(Alignment::Center), caption);
+}
+
+fn draw_section(frame: &mut Frame, area: Rect, content: &LeafContent) {
+    let lines: Vec<Line> = content.body.lines().map(|line| Line::from(line.to_string())).collect();
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let middle = Rect { y: area.y + (area.height - height) / 2, height, ..area };
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true }), middle);
 }
 
 impl Index {
@@ -386,5 +423,59 @@ fn row_height(row: &Row) -> u16 {
     match row {
         Row::Text(_) => 1,
         Row::Image { .. } => markdown::IMAGE_HEIGHT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn page(body: &str) -> LeafPage {
+        let leaf = Leaf { id: 1, kind: "Page".to_string(), title: "On call".to_string(), word_count: None, preview: None, image: None };
+        let book = Book {
+            id: 1,
+            title: "Handbook".to_string(),
+            subtitle: None,
+            author: None,
+            theme: None,
+            cover: None,
+            slug: "handbook".to_string(),
+            published: false,
+            editable: true,
+            leaves: vec![leaf],
+        };
+        let mut page = LeafPage::new("https://books.example.com".to_string(), 1, &book, 0);
+        page.loaded(Ok(LeafContent { title: "On call".to_string(), body: body.to_string(), image: None, fingerprint: "f1".to_string(), record_gid: None }));
+        page
+    }
+
+    fn drawn(page: &mut LeafPage) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut images = Images::none();
+        terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images)).unwrap();
+        views::screen_text(&terminal)
+    }
+
+    #[test]
+    fn the_end_of_a_page_shows_when_scrolled_past_a_picture() {
+        let mut page = page("First\n\n![Diagram](/u/diagram.png)\n\nLast line");
+        page.scroll = usize::MAX;
+
+        assert!(drawn(&mut page).iter().any(|it| it.trim() == "Last line"));
+    }
+
+    #[test]
+    fn shows_the_text_as_saved() {
+        let mut page = page("Before");
+        assert!(drawn(&mut page).iter().any(|it| it.trim() == "Before"));
+
+        page.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        page.editor.as_mut().unwrap().paste("After ");
+        page.saved("f2".to_string());
+
+        assert!(drawn(&mut page).iter().any(|it| it.trim() == "After Before"));
     }
 }

@@ -394,7 +394,7 @@ impl App {
             && page.book_id == book_id
             && page.leaf().id == leaf_id
         {
-            page.content = Loading::from(content);
+            page.loaded(content);
 
             for url in page.images() {
                 self.images.want(&page.host, &url, &self.sender);
