@@ -56,9 +56,13 @@ impl Renderer {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(text) if self.code_block => {
+                let prefix = format!("{}  ", self.prefixes.concat());
+                let room = self.width.saturating_sub(prefix.width()).max(1);
+
                 for line in text.lines() {
-                    let prefix = format!("{}  ", self.prefixes.concat());
-                    self.rows.push(Row::Text(Line::from(vec![Span::raw(prefix), Span::styled(line.to_string(), Style::default().fg(CODE))])));
+                    for piece in pieces(line, room) {
+                        self.rows.push(Row::Text(Line::from(vec![Span::raw(prefix.clone()), Span::styled(piece.to_string(), Style::default().fg(CODE))])));
+                    }
                 }
             }
             Event::Text(_) if self.image.is_some() => {}
@@ -316,6 +320,13 @@ mod tests {
                 Row::Image { url } => format!("[image {url}]"),
             })
             .collect()
+    }
+
+    #[test]
+    fn wraps_long_code_lines_to_the_width_keeping_their_spaces() {
+        let rows = render("```\nlet total =    price * quantity;\n```", 16);
+
+        assert_eq!(text(&rows), ["  let total =   ", "   price * quant", "  ity;"]);
     }
 
     #[test]
