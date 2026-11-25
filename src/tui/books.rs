@@ -9,7 +9,7 @@ use ratatui::widgets::Paragraph;
 
 use super::data::{self, BookCard};
 use super::help::Binding;
-use super::images::Images;
+use super::images::{Images, Source};
 use super::search::Search;
 use super::views::{self, Row, View};
 use super::{Loading, Message, Overlay, Request, theme};
@@ -102,7 +102,7 @@ impl Books {
                 let tiles = views::grid(body, TILE_WIDTH, TILE_HEIGHT, books.len(), self.selected, &mut self.columns, &mut self.offset);
 
                 for (index, tile) in tiles {
-                    book_tile(frame, tile, &books[index], index == self.selected, images);
+                    book_tile(frame, tile, &self.host, &books[index], index == self.selected, images);
                 }
             }
             View::List => {
@@ -122,13 +122,13 @@ impl Books {
     }
 }
 
-fn book_tile(frame: &mut Frame, area: Rect, book: &BookCard, selected: bool, images: &mut Images) {
+fn book_tile(frame: &mut Frame, area: Rect, host: &str, book: &BookCard, selected: bool, images: &mut Images) {
     let color = theme::color(book.theme.as_deref());
     let [cover, text] = Layout::vertical([Constraint::Fill(1), Constraint::Length(4)]).areas(area);
     let inside = views::selection_box(frame, cover, selected.then_some(color));
 
     let drawn = match &book.cover {
-        Some(cover) => images.draw(frame, inside, &cover.url),
+        Some(cover) => images.draw(frame, inside, &Source::remote(host, &cover.url)),
         None => false,
     };
 

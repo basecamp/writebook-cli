@@ -13,7 +13,7 @@ use super::books::Books;
 use super::confirm::{Confirm, Question};
 use super::data::{self, Book, Leaf, NewLeaf, Publication};
 use super::help::Binding;
-use super::images::Images;
+use super::images::{Images, Source};
 use super::publishing::Publishing;
 use super::reader::LeafPage;
 use super::search::Search;
@@ -235,7 +235,7 @@ impl BookPage {
 
         let [header, body] = Layout::vertical([Constraint::Length(12), Constraint::Fill(1)]).areas(area);
 
-        book_header(frame, header, book, images);
+        book_header(frame, header, &self.host, book, images);
 
         let leaves = self.moving.as_ref().unwrap_or(&book.leaves);
         let color = theme::color(book.theme.as_deref());
@@ -251,7 +251,7 @@ impl BookPage {
 
                 for (index, tile) in tiles {
                     let moving = self.moving.is_some() && index == self.selected;
-                    leaf_tile(frame, tile, &leaves[index], index == self.selected, moving, color, images);
+                    leaf_tile(frame, tile, &self.host, &leaves[index], index == self.selected, moving, color, images);
                 }
             }
             View::List => {
@@ -271,12 +271,12 @@ impl BookPage {
     }
 }
 
-fn book_header(frame: &mut Frame, area: Rect, book: &Book, images: &mut Images) {
+fn book_header(frame: &mut Frame, area: Rect, host: &str, book: &Book, images: &mut Images) {
     let [cover, _, text] = Layout::horizontal([Constraint::Length(18), Constraint::Length(2), Constraint::Fill(1)]).areas(area);
     let cover = Rect { height: cover.height.saturating_sub(1), ..cover };
 
     let drawn = match &book.cover {
-        Some(path) => images.draw(frame, cover, path),
+        Some(path) => images.draw(frame, cover, &Source::remote(host, path)),
         None => false,
     };
 
@@ -290,13 +290,13 @@ fn book_header(frame: &mut Frame, area: Rect, book: &Book, images: &mut Images) 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), text);
 }
 
-fn leaf_tile(frame: &mut Frame, area: Rect, leaf: &Leaf, selected: bool, moving: bool, color: Color, images: &mut Images) {
+fn leaf_tile(frame: &mut Frame, area: Rect, host: &str, leaf: &Leaf, selected: bool, moving: bool, color: Color, images: &mut Images) {
     let border = if moving { Color::Yellow } else { color };
     let [preview, text] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(area);
     let inside = views::selection_box(frame, preview, Some(if selected { border } else { Color::DarkGray }));
 
     let drawn = match (&leaf.image, leaf.is_picture()) {
-        (Some(image), true) => images.draw(frame, inside, &image.url),
+        (Some(image), true) => images.draw(frame, inside, &Source::remote(host, &image.url)),
         _ => false,
     };
 

@@ -111,7 +111,7 @@ pub enum Message {
     Instances(Result<Vec<Instance>>),
     Books(String, Result<Vec<BookCard>>),
     Book(String, u64, Result<data::Book>),
-    Image(String, Result<image::DynamicImage>),
+    Image(images::Source, Result<image::DynamicImage>),
     Changed(Result<()>),
     Published(Result<Publication>),
     /// The form for the book with this id on this host, or for a new book.
@@ -365,7 +365,7 @@ impl App {
     fn receive(&mut self, message: Message) {
         match message {
             Message::Instances(instances) => self.instances = Loading::from(instances),
-            Message::Image(path, image) => self.images.arrived(path, image),
+            Message::Image(source, image) => self.images.arrived(source, image),
             Message::Books(host, books) => self.books_loaded(host, books),
             Message::Book(host, book_id, book) => self.book_loaded(host, book_id, book),
             Message::Changed(result) => self.book_changed(result),

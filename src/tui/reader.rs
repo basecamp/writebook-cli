@@ -13,7 +13,7 @@ use super::confirm::{Confirm, Question};
 use super::data::{self, Book, Leaf, LeafContent};
 use super::editor::{self, Editor};
 use super::help::Binding;
-use super::images::Images;
+use super::images::{Images, Source};
 use super::markdown::{self, Row};
 use super::{Loading, Message, Overlay, Request, views};
 
@@ -262,7 +262,7 @@ impl LeafPage {
             Loading::Failed(error) => views::failure(frame, area, error),
             Loading::Ready(content) => {
                 if self.leaves[self.index].is_picture() {
-                    draw_picture(frame, area, content, images);
+                    draw_picture(frame, area, &self.host, content, images);
                 } else if self.leaves[self.index].is_section() {
                     draw_section(frame, column, content);
                 } else {
@@ -271,7 +271,7 @@ impl LeafPage {
                     }
 
                     if let Some(rendered) = &self.rendered {
-                        self.scroll = draw_rows(frame, column, &rendered.rows, self.scroll, images);
+                        self.scroll = draw_rows(frame, column, &self.host, &rendered.rows, self.scroll, images);
                     }
                 }
 
@@ -285,7 +285,7 @@ impl LeafPage {
 
 /// Draw the page's rows scrolled down by `scroll` lines, as far as they go.
 /// Returns the scroll, kept from going past the end.
-fn draw_rows(frame: &mut Frame, area: Rect, rows: &[Row], scroll: usize, images: &mut Images) -> usize {
+fn draw_rows(frame: &mut Frame, area: Rect, host: &str, rows: &[Row], scroll: usize, images: &mut Images) -> usize {
     let heights: Vec<u16> = rows.iter().map(row_height).collect();
     let total: usize = heights.iter().map(|it| usize::from(*it)).sum();
     let scroll = scroll.min(total.saturating_sub(usize::from(area.height)));
@@ -296,7 +296,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, rows: &[Row], scroll: usize, images:
         match &rows[shown.index] {
             Row::Text(line) => frame.render_widget(Paragraph::new(line.clone()), room),
             Row::Image { url } if shown.height == usize::from(markdown::IMAGE_HEIGHT) => {
-                if !images.draw_left(frame, room, url) {
+                if !images.draw_left(frame, room, &Source::remote(host, url)) {
                     frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()), room);
                 }
             }
@@ -337,10 +337,10 @@ fn visible_rows(heights: &[u16], scroll: usize, height: usize) -> Vec<Shown> {
     shown
 }
 
-fn draw_picture(frame: &mut Frame, area: Rect, content: &LeafContent, images: &mut Images) {
+fn draw_picture(frame: &mut Frame, area: Rect, host: &str, content: &LeafContent, images: &mut Images) {
     let picture = Rect { height: area.height.saturating_sub(3), ..area };
     let shown = match &content.image {
-        Some(url) => images.draw(frame, centered_image(picture), url),
+        Some(url) => images.draw(frame, centered_image(picture), &Source::remote(host, url)),
         None => false,
     };
 

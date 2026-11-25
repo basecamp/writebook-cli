@@ -10,8 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Wrap};
 
 use super::data::{self, BookForm, Role};
-use super::files;
-use super::images::Images;
+use super::images::{Images, Source};
 use super::{Loading, Message, Request, theme, views};
 
 const THEMES: [&str; 7] = ["black", "blue", "green", "magenta", "orange", "violet", "white"];
@@ -204,7 +203,7 @@ impl EditPage {
         .areas(area);
         let [cover, _, fields] = Layout::horizontal([Constraint::Length(20), Constraint::Length(2), Constraint::Fill(1)]).areas(top);
 
-        draw_cover(frame, cover, form, focused == Some(Field::Cover), images);
+        draw_cover(frame, cover, &self.host, form, focused == Some(Field::Cover), images);
 
         let [title, subtitle, author, theme] = Layout::vertical([Constraint::Length(3); 4]).areas(fields);
         input(frame, title, "Title", &form.title, focused == Some(Field::Title), true);
@@ -289,7 +288,7 @@ fn draw_themes(frame: &mut Frame, area: Rect, current: &str, focused: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
-fn draw_cover(frame: &mut Frame, area: Rect, form: &BookForm, focused: bool, images: &mut Images) {
+fn draw_cover(frame: &mut Frame, area: Rect, host: &str, form: &BookForm, focused: bool, images: &mut Images) {
     let [picture, caption] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
     let border = if focused { Color::Blue } else { Color::DarkGray };
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(border));
@@ -297,11 +296,11 @@ fn draw_cover(frame: &mut Frame, area: Rect, form: &BookForm, focused: bool, ima
     frame.render_widget(block, picture);
 
     let shown = match &form.new_cover {
-        Some(path) => Some(files::file_key(std::path::Path::new(path))),
-        None => form.cover.clone().filter(|_| !form.remove_cover),
+        Some(path) => Some(Source::file(std::path::Path::new(path))),
+        None => form.cover.as_deref().filter(|_| !form.remove_cover).map(|it| Source::remote(host, it)),
     };
     let drawn = match shown {
-        Some(key) => images.draw(frame, inside, &key),
+        Some(source) => images.draw(frame, inside, &source),
         None => false,
     };
 

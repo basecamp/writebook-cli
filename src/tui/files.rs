@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 use std::path::{Path, PathBuf};
 
 use super::help::Binding;
-use super::images::Images;
+use super::images::{Images, Source};
 use super::views;
 
 pub const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
@@ -116,10 +116,10 @@ impl FilePicker {
         self.draw_list(frame, list);
 
         if preview_room && let Some(file) = self.selected_file() {
-            let key = file_key(&file);
+            let source = Source::file(&file);
 
-            if !images.draw(frame, preview, &key) {
-                let note = if images.failed(&key) { "No preview" } else { "Loading the preview…" };
+            if !images.draw(frame, preview, &source) {
+                let note = if images.failed(&source) { "No preview" } else { "Loading the preview…" };
                 frame.render_widget(Paragraph::new(Line::from(note).dim()), preview);
             }
         }
@@ -237,11 +237,6 @@ impl FilePicker {
             .filter(|it| it.name.to_lowercase().contains(&filter))
             .collect()
     }
-}
-
-/// How a file on the disk is known to the image cache.
-pub fn file_key(path: &Path) -> String {
-    format!("file://{}", path.display())
 }
 
 fn shown_path(path: &Path) -> String {
