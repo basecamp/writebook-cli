@@ -388,11 +388,11 @@ mod tests {
     #[test]
     fn a_second_ctrl_c_quits_and_staying_brings_back_the_open_overlay() {
         let mut app = App::new(Images::none());
-        app.overlay = Some(Overlay::Confirm(Confirm::new(Question::DeleteLeaf)));
+        app.overlay = Some(Overlay::Confirm(Confirm::new(Question::Discard)));
 
         app.key(ctrl_c());
         app.key(press(KeyCode::Esc));
-        assert!(matches!(app.overlay, Some(Overlay::Confirm(Confirm { question: Question::DeleteLeaf, .. }))));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(Confirm { question: Question::Discard, .. }))));
 
         app.key(ctrl_c());
         app.key(ctrl_c());

@@ -25,7 +25,7 @@ pub enum Action {
     Copy(String),
     ResetInvite,
     SetRole(u64, bool),
-    Remove,
+    Remove(Person),
     Profile,
 }
 
@@ -48,11 +48,9 @@ impl SettingsPage {
         Box::new(move || Message::PeopleChanged(data::set_role(&host, person_id, administrator)))
     }
 
-    pub fn remove_selected(&self) -> Option<Request> {
-        let person_id = self.selected()?.id;
+    pub fn remove(&self, person_id: u64) -> Request {
         let host = self.host.clone();
-
-        Some(Box::new(move || Message::PeopleChanged(data::remove_person(&host, person_id))))
+        Box::new(move || Message::PeopleChanged(data::remove_person(&host, person_id)))
     }
 
     pub fn reset_invite(&self) -> Request {
@@ -95,7 +93,11 @@ impl SettingsPage {
                     return Action::SetRole(person.id, !person.administrator());
                 }
             }
-            KeyCode::Char('d') if self.changeable() => return Action::Remove,
+            KeyCode::Char('d') if self.changeable() => {
+                if let Some(person) = self.selected() {
+                    return Action::Remove(person.clone());
+                }
+            }
             KeyCode::Enter if self.selected().is_some_and(|it| it.current) => return Action::Profile,
             KeyCode::Char('c') => {
                 if let Some(invite) = self.invite() {
@@ -223,7 +225,7 @@ mod tests {
 
         page.key(press(KeyCode::Down));
         assert!(matches!(page.key(press(KeyCode::Right)), Action::SetRole(2, true)));
-        assert!(matches!(page.key(press(KeyCode::Char('d'))), Action::Remove));
+        assert!(matches!(page.key(press(KeyCode::Char('d'))), Action::Remove(Person { id: 2, .. })));
     }
 
     #[test]

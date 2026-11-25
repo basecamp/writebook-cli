@@ -50,7 +50,7 @@ impl App {
                     index.draw(frame, area, page);
                 }
             }
-            Some(Overlay::Confirm(confirm)) => confirm.draw(frame, area, &self.screen),
+            Some(Overlay::Confirm(confirm)) => confirm.draw(frame, area),
             None => {}
         }
     }
@@ -221,21 +221,22 @@ impl App {
 
     fn confirmed(&mut self, question: Question) {
         match question {
-            Question::DeleteLeaf => {
-                if matches!(self.screen, Screen::Leaf(..)) {
+            Question::DeleteLeaf { book_id, leaf } => {
+                if matches!(&self.screen, Screen::Leaf(page, _) if page.book_id == book_id) {
                     self.close_leaf();
                 }
 
                 if let Screen::Book(screen) = &self.screen
-                    && let Some(request) = screen.delete_selected()
+                    && screen.book_id == book_id
                 {
-                    self.spawn(request);
+                    self.spawn(screen.delete(leaf));
                 }
             }
-            Question::DeleteBook => {
+            Question::DeleteBook { book_id, .. } => {
                 if let Screen::Edit(page, _) = &mut self.screen
-                    && let Some(request) = page.delete()
+                    && page.book_id == Some(book_id)
                 {
+                    let request = page.delete(book_id);
                     self.spawn(request);
                 }
             }
@@ -244,11 +245,9 @@ impl App {
                     page.editor = None;
                 }
             }
-            Question::RemovePerson => {
-                if let Screen::Settings(page, _) = &self.screen
-                    && let Some(request) = page.remove_selected()
-                {
-                    self.spawn(request);
+            Question::RemovePerson(person) => {
+                if let Screen::Settings(page, _) = &self.screen {
+                    self.spawn(page.remove(person.id));
                 }
             }
             Question::ResetInvite => {

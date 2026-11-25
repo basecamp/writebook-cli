@@ -131,7 +131,7 @@ impl App {
                         self.spawn(request);
                     }
                 }
-                edit::Action::Delete => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::DeleteBook))),
+                edit::Action::Delete(book_id, title) => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::DeleteBook { book_id, title }))),
                 edit::Action::ChooseCover => self.overlay = Some(self.file_picker("Choose a cover", files::IMAGES, Purpose::Cover)),
             },
             Screen::Leaf(page, _) => match page.key(key) {
@@ -146,7 +146,7 @@ impl App {
                 settings::Action::Back => self.close_settings(),
                 settings::Action::Copy(url) => self.copy(url),
                 settings::Action::ResetInvite => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::ResetInvite))),
-                settings::Action::Remove => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::RemovePerson))),
+                settings::Action::Remove(person) => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::RemovePerson(person)))),
                 settings::Action::Profile => self.open_profile(),
                 settings::Action::SetRole(id, administrator) => {
                     let request = page.set_role(id, administrator);

@@ -126,12 +126,11 @@ impl BookPage {
         Box::new(move || Message::Changed(data::add(&host, book_id, &leaf)))
     }
 
-    pub fn delete_selected(&self) -> Option<Request> {
-        let leaf = self.selected_leaf()?.clone();
+    pub fn delete(&self, leaf: Leaf) -> Request {
         let host = self.host.clone();
         let book_id = self.book_id;
 
-        Some(Box::new(move || Message::Changed(data::delete(&host, book_id, &leaf))))
+        Box::new(move || Message::Changed(data::delete(&host, book_id, &leaf)))
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
@@ -182,7 +181,10 @@ impl BookPage {
                 Action::Overlay(Overlay::Search(Box::new(Search::new(Some(self.book_id), title))))
             }
             KeyCode::Char('a') if editable => Action::Overlay(Overlay::Add(Add::default())),
-            KeyCode::Char('d') if editable && has_leaf => Action::Overlay(Overlay::Confirm(Confirm::new(Question::DeleteLeaf))),
+            KeyCode::Char('d') if editable && has_leaf => match self.selected_leaf() {
+                Some(leaf) => Action::Overlay(Overlay::Confirm(Confirm::new(Question::DeleteLeaf { book_id: self.book_id, leaf: leaf.clone() }))),
+                None => Action::Nothing,
+            },
             KeyCode::Char('m') if editable && has_leaf => {
                 self.moving = self.book.ready().map(|it| it.leaves.clone());
                 Action::Nothing
@@ -326,11 +328,10 @@ fn words(count: u64) -> String {
 mod tests {
     use super::*;
     use ratatui::Terminal;
+    use crossterm::event::KeyModifiers;
     use ratatui::backend::TestBackend;
 
-    #[test]
-    fn lists_pages_with_their_word_counts_on_the_right() {
-        let mut terminal = Terminal::new(TestBackend::new(40, 19)).unwrap();
+    fn handbook() -> BookPage {
         let leaf = |id, kind: &str, title: &str, word_count| Leaf {
             id,
             kind: kind.to_string(),
@@ -353,6 +354,24 @@ mod tests {
             editable: true,
             leaves: vec![leaf(1, "Section", "Part one", None), leaf(2, "Page", "On call", Some(1234)), leaf(3, "Page", "", Some(1))],
         });
+        screen
+    }
+
+    #[test]
+    fn asks_to_delete_the_page_selected_when_d_was_pressed() {
+        let mut screen = handbook();
+        screen.selected = 1;
+
+        let Action::Overlay(Overlay::Confirm(confirm)) = screen.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)) else { panic!("no question") };
+        screen.selected = 2;
+
+        assert!(matches!(confirm.question, Question::DeleteLeaf { book_id: 1, leaf: Leaf { id: 2, .. } }));
+    }
+
+    #[test]
+    fn lists_pages_with_their_word_counts_on_the_right() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 19)).unwrap();
+        let mut screen = handbook();
         screen.selected = 1;
         let mut images = Images::none();
 

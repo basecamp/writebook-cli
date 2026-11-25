@@ -44,7 +44,8 @@ pub enum Action {
     Nothing,
     Cancel,
     Save,
-    Delete,
+    /// Ask before deleting the book with this id and title.
+    Delete(u64, String),
     ChooseCover,
 }
 
@@ -76,12 +77,11 @@ impl EditPage {
         Some(Box::new(move || Message::Saved(data::save_book(&host, &form))))
     }
 
-    pub fn delete(&mut self) -> Option<Request> {
-        let book_id = self.book_id?;
+    pub fn delete(&mut self, book_id: u64) -> Request {
         let host = self.host.clone();
         self.saving = true;
 
-        Some(Box::new(move || Message::BookDeleted(data::delete_book(&host, book_id))))
+        Box::new(move || Message::BookDeleted(data::delete_book(&host, book_id)))
     }
 
     /// The keys for the focused field.
@@ -156,7 +156,7 @@ impl EditPage {
             KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % fields.len(),
             KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + fields.len() - 1) % fields.len(),
             KeyCode::Enter if field == Field::Save => return Action::Save,
-            KeyCode::Enter if field == Field::Delete => return Action::Delete,
+            KeyCode::Enter if field == Field::Delete => return self.ask_to_delete(),
             KeyCode::Enter if field == Field::Cover => return Action::ChooseCover,
             _ => {
                 let Loading::Ready(form) = &mut self.form else { return Action::Nothing };
@@ -165,6 +165,13 @@ impl EditPage {
         }
 
         Action::Nothing
+    }
+
+    fn ask_to_delete(&self) -> Action {
+        match (self.book_id, self.form.ready()) {
+            (Some(book_id), Some(form)) => Action::Delete(book_id, form.title.clone()),
+            _ => Action::Nothing,
+        }
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
@@ -485,6 +492,10 @@ mod tests {
     fn only_a_book_that_exists_can_be_deleted() {
         assert_eq!(page(Some(4)).fields().last(), Some(&Field::Delete));
         assert_eq!(page(None).fields().last(), Some(&Field::Save));
+
+        let mut page = page(Some(4));
+        page.focus = page.fields().len() - 1;
+        assert!(matches!(page.key(press(KeyCode::Enter)), Action::Delete(4, title) if title == "Handbook"));
     }
 
     #[test]

@@ -6,8 +6,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
+use super::data::{Leaf, Person};
 use super::help::Binding;
-use super::{Overlay, Screen, views};
+use super::{Overlay, views};
 
 pub struct Confirm {
     pub question: Question,
@@ -16,12 +17,11 @@ pub struct Confirm {
 
 /// What's asked, and so what a yes does.
 pub enum Question {
-    /// Deleting the selected page of the book, or the page being read.
-    DeleteLeaf,
-    DeleteBook,
+    DeleteLeaf { book_id: u64, leaf: Leaf },
+    DeleteBook { book_id: u64, title: String },
     /// Throwing away the changes in the page editor.
     Discard,
-    RemovePerson,
+    RemovePerson(Person),
     ResetInvite,
     /// Quitting, over whatever overlay was open, to go back to when staying.
     Quit(Option<Box<Overlay>>),
@@ -64,36 +64,19 @@ impl Confirm {
         }
     }
 
-    /// The question about what's on the screen: the page, book or person it's about.
-    pub fn draw(&self, frame: &mut Frame, area: Rect, screen: &Screen) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect) {
         match &self.question {
-            Question::DeleteLeaf => {
-                let leaf = match screen {
-                    Screen::Book(page) => page.selected_leaf(),
-                    Screen::Leaf(page, _) => Some(page.leaf()),
-                    _ => None,
-                };
-
-                if let Some(leaf) = leaf {
-                    self.ask(frame, area, " Delete ", vec![Line::from(format!("Delete “{}”?", views::leaf_title(leaf)))], 44);
-                }
+            Question::DeleteLeaf { leaf, .. } => {
+                self.ask(frame, area, " Delete ", vec![Line::from(format!("Delete “{}”?", views::leaf_title(leaf)))], 44);
             }
-            Question::DeleteBook => {
-                if let Screen::Edit(page, _) = screen
-                    && let Some(form) = page.form.ready()
-                {
-                    let lines = vec![Line::from(format!("Delete “{}” and all its pages?", form.title)), Line::from("This can't be undone.").dim()];
-                    self.ask(frame, area, " Delete book ", lines, 50);
-                }
+            Question::DeleteBook { title, .. } => {
+                let lines = vec![Line::from(format!("Delete “{title}” and all its pages?")), Line::from("This can't be undone.").dim()];
+                self.ask(frame, area, " Delete book ", lines, 50);
             }
             Question::Discard => self.ask(frame, area, " Stop editing ", vec![Line::from("Throw away your changes to this page?")], 50),
-            Question::RemovePerson => {
-                if let Screen::Settings(page, _) = screen
-                    && let Some(person) = page.selected()
-                {
-                    let lines = vec![Line::from(format!("Remove {}?", person.name)), Line::from("They won't be able to sign in any more.").dim()];
-                    self.ask(frame, area, " Remove ", lines, 50);
-                }
+            Question::RemovePerson(person) => {
+                let lines = vec![Line::from(format!("Remove {}?", person.name)), Line::from("They won't be able to sign in any more.").dim()];
+                self.ask(frame, area, " Remove ", lines, 50);
             }
             Question::ResetInvite => {
                 let lines = vec![Line::from("Make a new invite link?"), Line::from("The current link will stop working.").dim()];
@@ -122,7 +105,7 @@ mod tests {
 
     #[test]
     fn a_confirmation_is_answered_by_choosing_and_pressing_enter() {
-        let mut confirm = Confirm::new(Question::DeleteLeaf);
+        let mut confirm = Confirm::new(Question::Discard);
 
         assert_eq!(confirm.answer(press(KeyCode::Char('y'))), None);
         assert_eq!(confirm.answer(press(KeyCode::Enter)), Some(false));

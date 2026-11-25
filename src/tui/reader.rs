@@ -140,7 +140,7 @@ impl LeafPage {
                 }
                 Action::Nothing
             }
-            KeyCode::Char('d') if self.editable => Action::Overlay(Overlay::Confirm(Confirm::new(Question::DeleteLeaf))),
+            KeyCode::Char('d') if self.editable => Action::Overlay(Overlay::Confirm(Confirm::new(Question::DeleteLeaf { book_id: self.book_id, leaf: self.leaf().clone() }))),
             _ => Action::Nothing,
         }
     }
