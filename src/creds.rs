@@ -56,6 +56,27 @@ pub enum Access {
     ReadOnly,
 }
 
+/// A token to send, and what the sign-in it came from may do.
+pub struct Token {
+    pub value: String,
+    pub access: Access,
+}
+
+impl Token {
+    /// WRITEBOOK_TOKEN can only be told apart by its prefix: API tokens only
+    /// read, and the rest are what a sign-in handed out.
+    fn given(value: String) -> Token {
+        let access = if value.starts_with("wb_api_") { Access::ReadOnly } else { Access::Full };
+        Token { value, access }
+    }
+}
+
+impl From<Credentials> for Token {
+    fn from(credentials: Credentials) -> Token {
+        Token { value: credentials.access_token, access: credentials.access }
+    }
+}
+
 impl Access {
     pub fn from_flag(read_only: bool) -> Access {
         if read_only {
@@ -119,27 +140,27 @@ fn is_local(host: &str) -> bool {
 /// A valid access token for the host, whatever it takes: the given token,
 /// cached when fresh, refreshed when expired, and a fresh device-flow sign-in
 /// when all else fails.
-pub fn access_token(host: &str) -> Result<String> {
+pub fn access_token(host: &str) -> Result<Token> {
     if let Some(token) = given_token(host)? {
-        return Ok(token);
+        return Ok(Token::given(token));
     }
 
     ensure_private_connection(host)?;
     let profile = inventory::profile_for(host)?;
 
     match storage::load(host, &profile)? {
-        Some(credentials) if !expired(&credentials) => Ok(credentials.access_token),
+        Some(credentials) if !expired(&credentials) => Ok(credentials.into()),
         Some(credentials) => match refresh(host, &profile, &credentials) {
-            Ok(refreshed) => Ok(refreshed.access_token),
-            Err(_) => Ok(login(host, &profile, credentials.access)?.access_token),
+            Ok(refreshed) => Ok(refreshed.into()),
+            Err(_) => Ok(login(host, &profile, credentials.access)?.into()),
         },
-        None => Ok(login(host, &profile, Access::Full)?.access_token),
+        None => Ok(login(host, &profile, Access::Full)?.into()),
     }
 }
 
 /// Force-refresh after a 401: the cached token was rejected even though it
 /// looked fresh, so rotate the refresh token or fall back to signing in again.
-pub fn renewed_access_token(host: &str) -> Result<String> {
+pub fn renewed_access_token(host: &str) -> Result<Token> {
     if given_token(host)?.is_some() {
         bail!("{host} did not accept the token from WRITEBOOK_TOKEN");
     }
@@ -149,10 +170,10 @@ pub fn renewed_access_token(host: &str) -> Result<String> {
 
     match storage::load(host, &profile)? {
         Some(credentials) => match refresh(host, &profile, &credentials) {
-            Ok(refreshed) => Ok(refreshed.access_token),
-            Err(_) => Ok(login(host, &profile, credentials.access)?.access_token),
+            Ok(refreshed) => Ok(refreshed.into()),
+            Err(_) => Ok(login(host, &profile, credentials.access)?.into()),
         },
-        None => Ok(login(host, &profile, Access::Full)?.access_token),
+        None => Ok(login(host, &profile, Access::Full)?.into()),
     }
 }
 
@@ -306,10 +327,13 @@ fn renewed(host: &str, stale: &Credentials, mut credentials: Credentials, body: 
     if body["scope"].is_null() {
         credentials.access = stale.access;
     } else if stale.access == Access::ReadOnly && credentials.access != Access::ReadOnly {
-        if let Err(error) = revoke(host, &credentials) {
-            eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#})");
+        match revoke(host, &credentials) {
+            Ok(()) => bail!("{host} renewed a read-only sign-in with full access, so it was revoked. Sign in again"),
+            Err(error) => bail!(
+                "{host} renewed a read-only sign-in with full access, so it wasn't kept, \
+                 but telling {host} to revoke it failed ({error:#}). Sign in again"
+            ),
         }
-        bail!("{host} renewed a read-only sign-in with full access, so it was revoked. Sign in again");
     }
 
     Ok(credentials)

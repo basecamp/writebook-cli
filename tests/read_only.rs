@@ -106,6 +106,70 @@ fn a_renewal_with_full_access_is_revoked_and_signing_in_again_stays_read_only() 
     assert!(server.requests().iter().any(|it| it.path == "/oauth/revocations" && it.body.contains("token=wb_rt_2")));
 }
 
+#[test]
+fn a_renewal_narrowed_to_read_only_stops_a_push_before_it_changes_anything() {
+    let server = fake_writebook_renewing(r#","scope":"read write""#, r#","scope":"read""#);
+    let config = tempdir();
+    let env = [("XDG_CONFIG_HOME", config.to_str().unwrap())];
+    writebook(&["instance", "add", &server.url], &env);
+    writebook(&["instance", "add", &server.url, "--code", "WXYZ-2345"], &env);
+
+    let checkout = tempdir().join("handbook");
+    let cloned = writebook(&["clone", &format!("{}/4/handbook", server.url), checkout.to_str().unwrap()], &env);
+    assert!(cloned.status.success(), "{}", stderr(&cloned));
+    std::fs::write(checkout.join("on-call.md"), "Page the person on call.\n").unwrap();
+    expire_sign_ins(&config);
+
+    let pushed = writebook_in(&checkout, &["push"], &env);
+
+    assert!(!pushed.status.success());
+    assert!(stderr(&pushed).contains("is read-only, which can't change books"), "{}", stderr(&pushed));
+    assert!(server.requests().iter().all(|it| it.method == "GET" || it.path.starts_with("/oauth")));
+}
+
+#[test]
+fn says_so_when_a_full_access_renewal_could_not_be_revoked() {
+    let server = Server::start(|request| match request.path.as_str() {
+        "/oauth/device_authorizations" => support::device_authorization(request),
+        "/oauth/tokens" if request.body.contains("grant_type=refresh_token") => reply(
+            200,
+            r#"{"access_token":"wb_at_2","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_2","scope":"read write"}"#,
+        ),
+        "/oauth/tokens" => {
+            reply(200, r#"{"access_token":"wb_at_1","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_1","scope":"read"}"#)
+        }
+        _ => reply(500, ""),
+    });
+    let config = tempdir();
+    let env = [("XDG_CONFIG_HOME", config.to_str().unwrap())];
+    sign_in_read_only(&server, &env);
+    expire_sign_ins(&config);
+
+    let listed = writebook(&["book", "list", "--instance", &server.url], &env);
+
+    assert!(stderr(&listed).contains("so it wasn't kept, but telling"), "{}", stderr(&listed));
+    assert!(stderr(&listed).contains("to revoke it failed"), "{}", stderr(&listed));
+}
+
+#[test]
+fn an_expired_read_only_sign_in_link_says_to_start_again_read_only() {
+    let server = fake_writebook(r#","scope":"read""#);
+    let config = tempdir();
+    let env = [("XDG_CONFIG_HOME", config.to_str().unwrap())];
+    writebook(&["instance", "add", &server.url, "--read-only"], &env);
+
+    let path = config.join("writebook/pending-sign-ins.json");
+    let mut pending: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for sign_in in pending["sign_ins"].as_object_mut().unwrap().values_mut() {
+        sign_in["expires_at"] = 0.into();
+    }
+    std::fs::write(&path, pending.to_string()).unwrap();
+
+    let finished = writebook(&["instance", "add", &server.url, "--code", "WXYZ-2345"], &env);
+
+    assert!(stderr(&finished).contains(&format!("Start again with `writebook instance add {} --read-only`", server.url)), "{}", stderr(&finished));
+}
+
 /// The checkout has no index.md, so getting as far as reading it means the
 /// token was let through.
 #[test]
@@ -144,6 +208,12 @@ fn fake_writebook_renewing(scope: &'static str, renewed_scope: &'static str) -> 
         }
         "/oauth/revocations" => reply(200, ""),
         "/books.json" => reply(200, "[]"),
+        "/books/4/manifest.json" => reply(
+            200,
+            r#"{"book":{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","theme":"blue","slug":"handbook","fingerprint":"f","cover":null},
+                "leaves":[{"id":12,"title":"On call","type":"Page","fingerprint":"g"}]}"#,
+        ),
+        "/books/4/pages/12.json" => reply(200, r#"{"id":12,"title":"On call","fingerprint":"g","record_gid":"gid://writebook/Page/12","body":"Call someone."}"#),
         _ => reply(404, ""),
     })
 }

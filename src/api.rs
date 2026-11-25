@@ -1,7 +1,7 @@
 //! Thin HTTP layer over the Writebook JSON API: bearer auth with transparent
 //! token renewal on 401, JSON verbs, binary downloads, and multipart uploads.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -87,7 +87,7 @@ pub enum PartData<'a> {
 
 pub struct Client {
     host: String,
-    token: String,
+    token: creds::Token,
 }
 
 impl Client {
@@ -176,8 +176,12 @@ impl Client {
     }
 
     fn send(&self, method: &str, path: &str, body: Option<&Value>) -> Result<ureq::http::Response<ureq::Body>> {
+        if method != "GET" {
+            self.ensure_can_write()?;
+        }
+
         let url = self.url(path)?;
-        let authorization = format!("Bearer {}", self.token);
+        let authorization = format!("Bearer {}", self.token.value);
 
         let response = match (method, body) {
             ("GET", None) => agent()
@@ -218,7 +222,7 @@ impl Client {
             let mut request = agent.get(&url);
 
             if origin_of(&url) == self.host {
-                request = request.header("Authorization", &format!("Bearer {}", self.token));
+                request = request.header("Authorization", &format!("Bearer {}", self.token.value));
             }
 
             let response = request.call().with_context(|| format!("could not reach {}", self.host))?;
@@ -237,8 +241,9 @@ impl Client {
     }
 
     fn multipart_request_with(&self, method: &str, path: &str, content_type: &str, body: &[u8]) -> Result<ureq::http::Response<ureq::Body>> {
+        self.ensure_can_write()?;
         let url = self.url(path)?;
-        let authorization = format!("Bearer {}", self.token);
+        let authorization = format!("Bearer {}", self.token.value);
 
         let response = match method {
             "POST" => agent()
@@ -257,6 +262,15 @@ impl Client {
         };
 
         response.with_context(|| format!("could not reach {}", self.host))
+    }
+
+    /// Checked before every change, since renewing a sign-in can narrow it.
+    fn ensure_can_write(&self) -> Result<()> {
+        if self.token.access == creds::Access::ReadOnly {
+            bail!("the sign-in to {} is read-only, which can't change books, so nothing more was changed", self.host);
+        }
+
+        Ok(())
     }
 
     fn renew_token(&mut self) -> Result<()> {

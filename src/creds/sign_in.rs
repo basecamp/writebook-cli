@@ -151,16 +151,15 @@ fn start_pending(host: &str, profile: &str, access: Access) -> Result<()> {
 fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
     let mut file = load_pending()?;
     let key = pending_key(host, profile);
-    let login = inventory::sign_in_command(host, profile);
 
     let Some(pending) = file.sign_ins.get(&key).cloned() else {
-        bail!("no sign-in to {host} is waiting for a code. Start one with `{login}`");
+        bail!("no sign-in to {host} is waiting for a code. Start one with `{}`", inventory::sign_in_command(host, profile));
     };
 
     if pending.expires_at <= now() {
         file.sign_ins.remove(&key);
         fsutil::write_json_privately(&pending_path()?, &file)?;
-        bail!("the sign-in link for {host} has expired. Start again with `{login}`");
+        bail!("the sign-in link for {host} has expired. Start again with `{}`", super::sign_in_command(host, profile, pending.access));
     }
 
     match try_code(host, &pending, code.trim())? {
