@@ -140,8 +140,13 @@ pub fn list(frame: &mut Frame, area: Rect, rows: &[Row], selected: usize, offset
 }
 
 /// Lay tiles out in rows, as many to a row as fit, scrolled so the selected
-/// one is in view. Remembers the columns for moving up and down.
+/// one is in view. Remembers the columns for moving up and down. No room,
+/// no tiles.
 pub fn grid(area: Rect, width: u16, height: u16, count: usize, selected: usize, columns: &mut usize, offset: &mut usize) -> Vec<(usize, Rect)> {
+    if area.width == 0 || area.height == 0 {
+        return Vec::new();
+    }
+
     let height = height.min(area.height);
     *columns = usize::from((area.width / width).max(1));
     let visible_rows = usize::from((area.height / height).max(1));
@@ -173,7 +178,8 @@ pub fn navigate(key: KeyEvent, selected: &mut usize, columns: usize, count: usiz
     }
 }
 
-fn scroll_into_view(offset: &mut usize, selected: usize, visible: usize) {
+/// Scroll a list showing `visible` items so the selected one is among them.
+pub fn scroll_into_view(offset: &mut usize, selected: usize, visible: usize) {
     if selected < *offset {
         *offset = selected;
     } else if selected >= *offset + visible {

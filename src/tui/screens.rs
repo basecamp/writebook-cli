@@ -444,7 +444,7 @@ impl App {
         if let Screen::Settings(page, _) = &mut self.screen
             && page.host == host
         {
-            page.people = Loading::from(people);
+            page.loaded(people);
         }
     }
 

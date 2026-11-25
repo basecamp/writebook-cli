@@ -16,6 +16,7 @@ pub struct SettingsPage {
     pub host: String,
     pub people: Loading<People>,
     selected: usize,
+    offset: usize,
     qr: bool,
 }
 
@@ -31,7 +32,7 @@ pub enum Action {
 
 impl SettingsPage {
     pub fn new(host: String) -> SettingsPage {
-        SettingsPage { host, people: Loading::Pending, selected: 0, qr: false }
+        SettingsPage { host, people: Loading::Pending, selected: 0, offset: 0, qr: false }
     }
 
     pub fn load(&self) -> Request {
@@ -41,6 +42,13 @@ impl SettingsPage {
             let people = data::people(&host);
             Message::People(host, people)
         })
+    }
+
+    /// The people as loaded, the selection kept on one of them.
+    pub fn loaded(&mut self, people: anyhow::Result<People>) {
+        self.people = Loading::from(people);
+        let count = self.people.ready().map(|it| it.people.len()).unwrap_or(0);
+        self.selected = self.selected.min(count.saturating_sub(1));
     }
 
     pub fn set_role(&self, person_id: u64, administrator: bool) -> Request {
@@ -166,10 +174,14 @@ impl SettingsPage {
             frame.render_widget(Paragraph::new(lines).block(block), invite);
         }
 
+        views::scroll_into_view(&mut self.offset, self.selected, usize::from(list.height).max(1));
+
         let lines: Vec<Line> = people
             .people
             .iter()
             .enumerate()
+            .skip(self.offset)
+            .take(usize::from(list.height))
             .map(|(index, person)| person_line(person, index == self.selected, people.can_administer, list.width))
             .collect();
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), list);
@@ -214,6 +226,24 @@ mod tests {
             ],
         });
         page
+    }
+
+    #[test]
+    fn keeps_the_selected_person_in_view_and_on_someone_after_a_reload() {
+        let mut page = page(true);
+        let everyone: Vec<Person> = (1..=40).map(|id| Person { id, name: format!("Person {id}"), role: "member".to_string(), current: id == 1 }).collect();
+        page.loaded(Ok(People { join_url: None, can_administer: true, people: everyone.clone() }));
+
+        for _ in 0..39 {
+            page.key(press(KeyCode::Down));
+        }
+
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 20)).unwrap();
+        terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com")).unwrap();
+        assert!(views::screen_text(&terminal).iter().any(|it| it.starts_with("› Person 40")));
+
+        page.loaded(Ok(People { join_url: None, can_administer: true, people: everyone[..3].to_vec() }));
+        assert_eq!(page.selected().map(|it| it.id), Some(3));
     }
 
     #[test]

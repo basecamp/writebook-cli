@@ -484,9 +484,8 @@ mod tests {
         data::Leaf { id, kind: "Page".to_string(), title: format!("Page {id}"), word_count: None, preview: None, image: None }
     }
 
-    fn editing_page(leaf_id: u64) -> Screen {
-        let books = Books::new(HOST.to_string(), "books.example.com".to_string());
-        let book = data::Book {
+    fn book() -> data::Book {
+        data::Book {
             id: 1,
             title: "Handbook".to_string(),
             subtitle: None,
@@ -497,11 +496,40 @@ mod tests {
             published: false,
             editable: true,
             leaves: vec![leaf(1), leaf(2)],
-        };
+        }
+    }
+
+    fn books() -> Books {
+        let mut books = Books::new(HOST.to_string(), "books.example.com".to_string());
+        let card = data::BookCard { id: 1, title: "Handbook".to_string(), subtitle: None, author: None, theme: None, cover: None, editable: true };
+        books.books = Loading::Ready(vec![card.clone(), card]);
+        books
+    }
+
+    fn book_page() -> BookPage {
+        let mut page = BookPage::new(books(), 1);
+        page.book = Loading::Ready(book());
+        page
+    }
+
+    fn reading_page(leaf_id: u64) -> LeafPage {
+        let book = book();
         let index = book.leaves.iter().position(|it| it.id == leaf_id).unwrap();
         let mut page = LeafPage::new(HOST.to_string(), 1, &book, index);
+        page.loaded(Ok(data::LeafContent {
+            title: "Page".to_string(),
+            body: "# Title\n\nSome text, a list:\n\n- one\n- > two\n\n![a](/a.png)\n\n| a | b |\n|---|---|\n| 1 | 2 |".to_string(),
+            image: None,
+            fingerprint: "f1".to_string(),
+            record_gid: None,
+        }));
+        page
+    }
+
+    fn editing_page(leaf_id: u64) -> Screen {
+        let mut page = reading_page(leaf_id);
         page.editor = Some(editor::Editor::new("Page", ""));
-        Screen::Leaf(Box::new(page), Box::new(BookPage::new(books, 1)))
+        Screen::Leaf(Box::new(page), Box::new(book_page()))
     }
 
     fn edited_body(app: &App) -> String {
@@ -567,6 +595,73 @@ mod tests {
         app.overlay = None;
         app.paste("- one\n- two");
         assert_eq!(edited_body(&app), "- one\n- two");
+    }
+
+    #[test]
+    fn draws_every_screen_and_overlay_in_a_terminal_too_small_for_them() {
+        let mut settings = SettingsPage::new(HOST.to_string());
+        settings.people = Loading::Ready(data::People {
+            join_url: Some(format!("{HOST}/join/abc")),
+            can_administer: true,
+            people: (1..30).map(|id| data::Person { id, name: format!("Person {id}"), role: "member".to_string(), current: id == 1 }).collect(),
+        });
+        let mut edit = EditPage::new(HOST.to_string(), "books.example.com".to_string(), Some(1));
+        edit.form = Loading::Ready(form(Some(1), "Handbook"));
+        let mut profile = ProfilePage::new(HOST.to_string());
+        profile.loaded(Ok(data::Profile { id: 1, name: "Stanko".to_string(), email: "stanko@example.com".to_string() }));
+
+        let screens: Vec<fn() -> Screen> = vec![
+            || Screen::Instances(InstancePicker::new(0)),
+            || Screen::Books(books()),
+            || Screen::Book(Box::new(book_page())),
+            || Screen::Leaf(Box::new(reading_page(1)), Box::new(book_page())),
+            || editing_page(1),
+        ];
+        let mut apps: Vec<App> = Vec::new();
+
+        for screen in screens {
+            for view in [View::Gallery, View::List] {
+                let mut app = App::new(Images::none());
+                app.screen = screen();
+                app.books_view = view;
+                app.book_view = view;
+                apps.push(app);
+            }
+        }
+
+        for screen in [
+            Screen::Edit(Box::new(edit), Box::new(Screen::Books(books()))),
+            Screen::Settings(Box::new(settings), books()),
+            Screen::Profile(Box::new(profile), Box::new(Screen::Books(books()))),
+        ] {
+            let mut app = App::new(Images::none());
+            app.screen = screen;
+            apps.push(app);
+        }
+
+        let overlays: Vec<fn(&App) -> Overlay> = vec![
+            |_| Overlay::Instances(InstancePicker::new(0)),
+            |_| Overlay::Add(Add::default()),
+            |_| Overlay::Publishing(Publishing::new(HOST, 1, &book())),
+            |_| Overlay::Search(Box::new(Search::new(None, "every book".to_string()))),
+            |_| Overlay::Confirm(Confirm::new(Question::Quit(None))),
+            |app| match &app.screen {
+                Screen::Leaf(page, _) => Overlay::Index(Index::new(page)),
+                _ => Overlay::Confirm(Confirm::new(Question::Discard)),
+            },
+            |_| Overlay::Files(Box::new(FilePicker::new("Choose a cover", files::IMAGES, std::env::temp_dir())), Purpose::Cover),
+        ];
+
+        for app in &mut apps {
+            for overlay in std::iter::once(None).chain(overlays.iter().map(Some)) {
+                app.overlay = overlay.map(|it| it(app));
+
+                for (width, height) in [(0, 0), (1, 1), (2, 1), (4, 3), (8, 5), (12, 4), (20, 8), (30, 12)] {
+                    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+                    terminal.draw(|frame| app.draw(frame)).unwrap();
+                }
+            }
+        }
     }
 
     #[test]

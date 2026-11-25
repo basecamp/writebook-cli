@@ -51,6 +51,7 @@ pub enum Action {
 /// The book's pages, to jump to one.
 pub struct Index {
     selected: usize,
+    offset: usize,
 }
 
 pub enum IndexAction {
@@ -362,7 +363,7 @@ fn draw_section(frame: &mut Frame, area: Rect, content: &LeafContent) {
 impl Index {
     /// Opens on the page being read.
     pub fn new(page: &LeafPage) -> Index {
-        Index { selected: page.index }
+        Index { selected: page.index, offset: 0 }
     }
 
     pub fn key(&mut self, key: KeyEvent, page: &mut LeafPage) -> IndexAction {
@@ -382,13 +383,16 @@ impl Index {
         vec![("↑↓", "select"), ("enter", "go to page"), ("esc", "close")]
     }
 
-    /// The book's index: its pages, sections in bold, the current one marked.
-    pub fn draw(&self, frame: &mut Frame, area: Rect, page: &LeafPage) {
+    /// The book's index: its pages, sections in bold, the current one
+    /// marked, as many as fit around the selected one.
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect, page: &LeafPage) {
         let selected = self.selected;
         let width = 50.min(area.width);
         let mut lines = vec![Line::from(page.book_title.clone()).bold(), Line::default()];
+        let fit = usize::from(area.height.saturating_sub(6)).max(1);
+        views::scroll_into_view(&mut self.offset, selected, fit);
 
-        for (index, leaf) in page.leaves.iter().enumerate() {
+        for (index, leaf) in page.leaves.iter().enumerate().skip(self.offset).take(fit) {
             let title = if leaf.title.is_empty() { "Untitled".to_string() } else { leaf.title.clone() };
             let marker = if index == selected { "› " } else { "  " };
             let dots = ".".repeat(usize::from(width).saturating_sub(title.chars().count() + 5));
@@ -457,6 +461,18 @@ mod tests {
         let mut images = Images::none();
         terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images)).unwrap();
         views::screen_text(&terminal)
+    }
+
+    #[test]
+    fn the_index_keeps_the_selected_page_in_view() {
+        let mut page = page("");
+        page.leaves = (1..=40).map(|id| Leaf { id, kind: "Page".to_string(), title: format!("Page {id}"), word_count: None, preview: None, image: None }).collect();
+        page.index = 39;
+        let mut index = Index::new(&page);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
+        terminal.draw(|frame| index.draw(frame, frame.area(), &page)).unwrap();
+        assert!(views::screen_text(&terminal).iter().any(|it| it.contains("› Page 40")));
     }
 
     #[test]
