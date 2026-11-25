@@ -76,6 +76,20 @@ writebook instance add https://handbook.example.org --alias handbook
 writebook book list --instance handbook
 ```
 
+To let an MCP client like Claude read and edit your books, add `writebook mcp`
+to it. It uses your sign-in:
+
+```sh
+claude mcp add writebook -- writebook mcp
+```
+
+To serve a Writebook to everyone who uses it, run an MCP server next to it.
+It keeps no sign-in: each person's client sends their own Writebook token.
+
+```sh
+writebook mcp --instance https://books.example.com --server 127.0.0.1:8080
+```
+
 Run `writebook --help` for every command.
 
 ## Development

@@ -74,6 +74,20 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// The site turned the token away.
+#[derive(Debug)]
+pub struct TokenRejected {
+    pub host: String,
+}
+
+impl std::fmt::Display for TokenRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} did not accept the token — sign in again, or check WRITEBOOK_TOKEN", self.host)
+    }
+}
+
+impl std::error::Error for TokenRejected {}
+
 pub struct Part<'a> {
     pub name: &'a str,
     pub filename: Option<&'a str>,
@@ -88,12 +102,20 @@ pub enum PartData<'a> {
 pub struct Client {
     host: String,
     token: creds::Token,
+    /// Whether a rejected token may be renewed from the stored sign-in.
+    renewable: bool,
 }
 
 impl Client {
     pub fn connect(host: &str) -> Result<Client> {
         let token = creds::access_token(host)?;
-        Ok(Client { host: host.to_string(), token })
+        Ok(Client { host: host.to_string(), token, renewable: true })
+    }
+
+    /// A client for a token someone else handed over, which is used as it is
+    /// and never swapped for the stored sign-in.
+    pub fn with_token(host: &str, token: creds::Token) -> Client {
+        Client { host: host.to_string(), token, renewable: false }
     }
 
     pub fn get(&mut self, path: &str) -> Result<Value> {
@@ -274,6 +296,10 @@ impl Client {
     }
 
     fn renew_token(&mut self) -> Result<()> {
+        if !self.renewable {
+            return Err(TokenRejected { host: self.host.clone() }.into());
+        }
+
         self.token = creds::renewed_access_token(&self.host)?;
         Ok(())
     }

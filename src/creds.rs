@@ -65,7 +65,7 @@ pub struct Token {
 impl Token {
     /// WRITEBOOK_TOKEN can only be told apart by its prefix: API tokens only
     /// read, and the rest are what a sign-in handed out.
-    fn given(value: String) -> Token {
+    pub fn given(value: String) -> Token {
         let access = if value.starts_with("wb_api_") { Access::ReadOnly } else { Access::Full };
         Token { value, access }
     }
@@ -120,7 +120,7 @@ fn given_token(host: &str) -> Result<Option<String>> {
 }
 
 /// Sign-ins only travel over https, or plain http to this machine.
-fn ensure_private_connection(host: &str) -> Result<()> {
+pub fn ensure_private_connection(host: &str) -> Result<()> {
     if host.starts_with("http://") && !is_local(host) {
         bail!("{host} isn't https, so signing in to it would send your sign-in in the clear. Use its https:// address");
     }
@@ -210,6 +210,14 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
 /// one. It may have expired; it's renewed when used.
 pub fn stored_access(host: &str, profile: &str) -> Result<Option<Access>> {
     Ok(storage::load(host, profile)?.map(|it| it.access))
+}
+
+/// Whether the token the CLI would send to this site may change books.
+pub fn can_write(host: &str) -> Result<bool> {
+    match given_token(host)? {
+        Some(token) => Ok(Token::given(token).access == Access::Full),
+        None => Ok(stored_access(host, &inventory::profile_for(host)?)? != Some(Access::ReadOnly)),
+    }
 }
 
 /// Fail before changing anything when the sign-in can only read.
