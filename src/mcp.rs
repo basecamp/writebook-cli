@@ -153,11 +153,22 @@ impl Connection {
         }
     }
 
+    /// Reads always send a token. The CLI reads published books without one,
+    /// but a tool that quietly did would answer as if a lost sign-in were fine.
     fn web(&self) -> Result<Web> {
-        match &self.bearer {
-            Some(token) => Ok(Web::new(&self.host, Some(token.clone()))),
-            None => Ok(Web::new(&self.host, creds::existing_access_token(&self.host)?)),
-        }
+        let token = match &self.bearer {
+            Some(token) => token.clone(),
+            None => match creds::existing_access_token(&self.host)? {
+                Some(token) => token,
+                None => bail!(
+                    "you're not signed in to {}. Sign in with `{}`",
+                    self.host,
+                    inventory::sign_in_command(&self.host, &inventory::profile_for(&self.host)?)
+                ),
+            },
+        };
+
+        Ok(Web::new(&self.host, Some(token)))
     }
 
     fn client(&self) -> Result<api::Client> {

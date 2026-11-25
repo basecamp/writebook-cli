@@ -236,6 +236,8 @@ fn read_page(connection: &Connection, book_id: u64, page_id: u64) -> Result<Valu
     }))
 }
 
+const SEARCH_LIMIT: usize = 50;
+
 fn search(connection: &Connection, arguments: &JsonObject) -> Result<Value> {
     let query = text(arguments, "query")?;
 
@@ -248,7 +250,10 @@ fn search(connection: &Connection, arguments: &JsonObject) -> Result<Value> {
         None => None,
     };
 
-    Ok(json!(read::find(&connection.web()?, book_id, &query)?))
+    let mut hits = read::find(&connection.web()?, book_id, &query)?;
+    // Older Writebooks are searched one book at a time, with no limit overall.
+    hits.truncate(SEARCH_LIMIT);
+    Ok(json!(hits))
 }
 
 fn create_page(connection: &Connection, arguments: &JsonObject) -> Result<Value> {
@@ -259,7 +264,7 @@ fn create_page(connection: &Connection, arguments: &JsonObject) -> Result<Value>
     });
 
     let response = connection.client()?.post(&format!("/books/{book_id}/pages.json"), &body)?;
-    Ok(created(&response))
+    created(&response)
 }
 
 fn update_page(connection: &Connection, arguments: &JsonObject) -> Result<Value> {
@@ -280,7 +285,7 @@ fn update_page(connection: &Connection, arguments: &JsonObject) -> Result<Value>
     }
 
     match connection.client()?.patch(&sync::leaf_path(book_id, "Page", page_id), &body) {
-        Ok(response) => Ok(created(&response)),
+        Ok(response) => created(&response),
         Err(error) if error.downcast_ref::<ApiError>().is_some_and(|it| it.status == 409) => {
             bail!("page {page_id} changed since it was read, so nothing was changed. Read it again, then make the change to what it says now")
         }
@@ -297,12 +302,14 @@ fn create_section(connection: &Connection, arguments: &JsonObject) -> Result<Val
     let body = json!({ "leaf": { "title": text(arguments, "title")? }, "section": { "body": markdown } });
 
     let response = connection.client()?.post(&format!("/books/{book_id}/sections.json"), &body)?;
-    Ok(created(&response))
+    created(&response)
 }
 
 /// What a change hands back: the leaf's id, and its fingerprint for the next change.
-fn created(response: &Value) -> Value {
-    json!({ "id": response["id"], "fingerprint": response["fingerprint"] })
+fn created(response: &Value) -> Result<Value> {
+    let id = response["id"].as_u64().context("Writebook's answer had no id for the page")?;
+    let fingerprint = response["fingerprint"].as_str().filter(|it| !it.is_empty()).context("Writebook's answer had no fingerprint for the page")?;
+    Ok(json!({ "id": id, "fingerprint": fingerprint }))
 }
 
 fn number(arguments: &JsonObject, name: &str) -> Result<u64> {

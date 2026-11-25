@@ -11,7 +11,7 @@ use support::{Server, reply, tempdir};
 #[test]
 fn reads_and_changes_pages_on_stdio() {
     let server = fake_writebook();
-    let mut mcp = Mcp::start(&server, "wb_at_secret");
+    let mut mcp = Mcp::start(&server, Some("wb_at_secret"));
 
     let tools = mcp.request("tools/list", json!({}));
     let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|it| it["name"].as_str().unwrap()).collect();
@@ -41,7 +41,7 @@ fn reads_and_changes_pages_on_stdio() {
 #[test]
 fn a_read_only_token_gets_only_the_tools_that_read() {
     let server = fake_writebook();
-    let mut mcp = Mcp::start(&server, "wb_api_secret");
+    let mut mcp = Mcp::start(&server, Some("wb_api_secret"));
 
     let tools = mcp.request("tools/list", json!({}));
     let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|it| it["name"].as_str().unwrap()).collect();
@@ -56,7 +56,7 @@ fn a_read_only_token_gets_only_the_tools_that_read() {
 fn reaches_the_instance_a_tool_names() {
     let server = fake_writebook();
     let other = fake_writebook();
-    let mut mcp = Mcp::start(&server, "wb_at_secret");
+    let mut mcp = Mcp::start(&server, Some("wb_at_secret"));
     std::fs::write(
         mcp.config.join("writebook/instances.toml"),
         format!(
@@ -77,6 +77,37 @@ fn reaches_the_instance_a_tool_names() {
 
     let unknown = mcp.call_failing("list_books", json!({ "instance": "nope" }));
     assert!(unknown.contains("there is no instance 'nope'"), "{unknown}");
+}
+
+#[test]
+fn says_so_when_not_signed_in_rather_than_reading_only_published_books() {
+    let server = fake_writebook();
+    let mut mcp = Mcp::start(&server, None);
+
+    let refused = mcp.call_failing("list_books", json!({}));
+
+    assert!(refused.contains(&format!("you're not signed in to {}", server.url)), "{refused}");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn search_returns_at_most_50_matches() {
+    let server = fake_writebook();
+    let mut mcp = Mcp::start(&server, Some("wb_at_secret"));
+
+    let hits = mcp.call("search", json!({ "query": "page" }));
+
+    assert_eq!(hits.as_array().unwrap().len(), 50);
+}
+
+#[test]
+fn a_change_writebook_answers_without_an_id_is_an_error() {
+    let server = fake_writebook();
+    let mut mcp = Mcp::start(&server, Some("wb_at_secret"));
+
+    let failed = mcp.call_failing("create_page", json!({ "book_id": 4, "title": "New", "markdown": "" }));
+
+    assert!(failed.contains("had no id for the page"), "{failed}");
 }
 
 #[test]
@@ -147,15 +178,21 @@ fn serves_each_http_caller_with_their_own_token() {
     assert!(events.iter().any(|it| it["event"] == "http_request" && it["status"] == 401 && it["method"] == "POST"), "{rest}");
 
     // Nothing in them points at who made a request or what it was about.
-    for secret in ["wb_at_alice", "wb_at_revoked", "127.0.0.1", "Handbook"] {
-        assert!(!rest.contains(secret), "the logs mention {secret}: {rest}");
+    for word in ["wb_at_alice", "wb_at_revoked", "127.0.0.1", "Handbook"] {
+        assert!(!rest.contains(word), "the logs mention a token, an address or a title");
     }
 }
 
 fn fake_writebook() -> Server {
     Server::start(|request| match (request.method.as_str(), request.path.as_str()) {
         _ if request.header("Authorization") == Some("Bearer wb_at_revoked") => reply(401, ""),
+        ("GET", path) if path.starts_with("/search.json?q=page") => {
+            let hits: Vec<Value> =
+                (1..=60).map(|n| json!({ "title": format!("Page {n}"), "url": "http://books.test/4/handbook/12/page", "book": { "title": "Handbook" } })).collect();
+            reply(200, &json!({ "results": hits }).to_string())
+        }
         ("GET", path) if path.starts_with("/search.json") => reply(200, r#"{"results":[]}"#),
+        ("POST", "/books/4/pages.json") => reply(201, "{}"),
         ("GET", "/books.json") => {
             reply(200, r#"[{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","slug":"handbook","url":"http://books.test/4/handbook"}]"#)
         }
@@ -181,7 +218,7 @@ struct Mcp {
 }
 
 impl Mcp {
-    fn start(server: &Server, token: &str) -> Mcp {
+    fn start(server: &Server, token: Option<&str>) -> Mcp {
         let config = tempdir();
         std::fs::create_dir_all(config.join("writebook")).unwrap();
         std::fs::write(
@@ -190,11 +227,14 @@ impl Mcp {
         )
         .unwrap();
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_writebook"))
-            .args(["mcp"])
-            .env("WRITEBOOK_TOKEN", token)
-            .env("WRITEBOOK_TOKEN_HOST", &server.url)
-            .env("XDG_CONFIG_HOME", &config)
+        let mut command = Command::new(env!("CARGO_BIN_EXE_writebook"));
+        command.args(["mcp"]).env_remove("WRITEBOOK_TOKEN").env("XDG_CONFIG_HOME", &config);
+
+        if let Some(token) = token {
+            command.env("WRITEBOOK_TOKEN", token).env("WRITEBOOK_TOKEN_HOST", &server.url);
+        }
+
+        let mut child = command
             .env("WRITEBOOK_NO_KEYRING", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
