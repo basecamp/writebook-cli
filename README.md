@@ -96,6 +96,13 @@ Or run it with Docker:
 docker run -p 8080:8080 ghcr.io/basecamp/writebook-cli mcp --instance https://books.example.com --serve 0.0.0.0:8080
 ```
 
+To browse your books in the terminal, and add, delete, move and publish
+pages, run:
+
+```sh
+writebook tui
+```
+
 Run `writebook --help` for every command.
 
 ## Development

@@ -179,10 +179,25 @@ pub fn renewed_access_token(host: &str) -> Result<Token> {
 
 /// A token for read-only requests, if there is one without asking anybody:
 /// the given token, or the stored sign-in (refreshed if need be). None means
-/// read anonymously.
+/// read anonymously, which is also what happens when renewing fails.
 pub fn existing_access_token(host: &str) -> Result<Option<String>> {
+    match signed_in_token(host) {
+        Ok(token) => Ok(token.map(|it| it.value)),
+        Err(error) if error.is::<RenewalFailed>() => {
+            eprintln!("note: {error:#}; reading without it");
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The token for this site that needs nobody to approve anything: the given
+/// token, or the stored sign-in, renewed if it expired. None when there is no
+/// sign-in. A renewal that fails is an error that says why, so a caller that
+/// can't print notes, like the TUI or MCP, can tell a dead sign-in from none.
+pub fn signed_in_token(host: &str) -> Result<Option<Token>> {
     if let Some(token) = given_token(host)? {
-        return Ok(Some(token));
+        return Ok(Some(Token::given(token)));
     }
 
     let profile = inventory::profile_for(host)?;
@@ -195,16 +210,27 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
 
     if expired(&credentials) {
         match refresh(host, &profile, &credentials) {
-            Ok(refreshed) => Ok(Some(refreshed.access_token)),
-            Err(error) => {
-                eprintln!("note: could not renew your sign-in to {host} ({error:#}); reading without it");
-                Ok(None)
-            }
+            Ok(refreshed) => Ok(Some(refreshed.into())),
+            Err(cause) => Err(RenewalFailed { host: host.to_string(), cause }.into()),
         }
     } else {
-        Ok(Some(credentials.access_token))
+        Ok(Some(credentials.into()))
     }
 }
+
+#[derive(Debug)]
+pub struct RenewalFailed {
+    host: String,
+    cause: anyhow::Error,
+}
+
+impl std::fmt::Display for RenewalFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "could not renew your sign-in to {} ({:#})", self.host, self.cause)
+    }
+}
+
+impl std::error::Error for RenewalFailed {}
 
 /// What the stored sign-in to this site as this profile may do, if there is
 /// one. It may have expired; it's renewed when used.

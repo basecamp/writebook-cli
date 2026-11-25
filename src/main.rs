@@ -21,6 +21,7 @@ mod setup;
 mod skill;
 mod status;
 mod sync;
+mod tui;
 mod upgrade;
 mod web;
 
@@ -151,6 +152,8 @@ enum Command {
         #[usage(long)]
         serve: Option<String>,
     },
+    /// Browse your instances' books in the terminal, and arrange their pages
+    Tui,
     /// Print or install the agent skill for coding agents
     #[usage(help_heading = "Agent commands")]
     Skill {
@@ -379,6 +382,7 @@ fn run(cli: Cli) -> Result<()> {
             read::search(&query, book.as_deref(), instance.as_deref(), Format::from_flags(json, markdown, jq)?)
         }
         Command::Mcp { instance, read_only, serve } => mcp::run(instance.as_deref(), read_only, serve.as_deref()),
+        Command::Tui => tui::run(),
         Command::Setup => setup::run(),
         Command::Skill { command } => match command {
             SkillCommand::Print => skill::print(),

@@ -61,10 +61,14 @@ pub struct Leaf {
 
 #[derive(Serialize)]
 pub struct Hit {
-    book: String,
-    title: String,
-    url: String,
-    snippet: String,
+    pub book: String,
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    /// The snippet as HTML with only the matched words marked, for the TUI.
+    /// Writebooks from before it was added don't send it.
+    #[serde(skip)]
+    pub marked_snippet: Option<String>,
 }
 
 /// A book in `/books.json`
@@ -87,6 +91,7 @@ struct ApiHit {
     title: String,
     url: String,
     snippet: Option<String>,
+    marked_snippet: Option<String>,
     book: ApiHitBook,
 }
 
@@ -359,6 +364,7 @@ fn search_api(web: &Web, book_id: Option<u64>, query: &str) -> Result<Option<Vec
                 title: hit.title,
                 url: hit.url,
                 snippet: one_line(&hit.snippet.unwrap_or_default()),
+                marked_snippet: hit.marked_snippet,
             })
             .collect(),
     ))
@@ -375,7 +381,7 @@ fn search_pages(web: &Web, book_id: Option<u64>, query: &str) -> Result<Vec<Hit>
 
     for (book_id, book_title) in books {
         for hit in search_book(web, book_id, query)? {
-            hits.push(Hit { book: book_title.clone(), title: hit.title, url: web.url(&hit.path), snippet: hit.snippet });
+            hits.push(Hit { book: book_title.clone(), title: hit.title, url: web.url(&hit.path), snippet: hit.snippet, marked_snippet: None });
         }
     }
 

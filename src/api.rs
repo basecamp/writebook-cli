@@ -135,6 +135,11 @@ impl Client {
     }
 
     pub fn download(&mut self, path: &str) -> Result<Vec<u8>> {
+        self.download_at_most(path, DOWNLOAD_LIMIT)
+    }
+
+    /// Download a file, failing when it's bigger than `limit` bytes.
+    pub fn download_at_most(&mut self, path: &str, limit: u64) -> Result<Vec<u8>> {
         let mut response = self.send_download(path)?;
 
         if response.status().as_u16() == 401 {
@@ -151,7 +156,7 @@ impl Client {
         response
             .body_mut()
             .with_config()
-            .limit(DOWNLOAD_LIMIT)
+            .limit(limit)
             .read_to_vec()
             .with_context(|| format!("could not download {path}"))
     }

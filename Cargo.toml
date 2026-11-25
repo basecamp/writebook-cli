@@ -10,12 +10,19 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+base64 = "0.22"
+crossterm = "0.29"
 diffy = "0.4"
 dirs = "6"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 jaq-core = "3.1.2"
 jaq-json = "2.0.3"
 jaq-std = "3.0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+qrcode = { version = "0.15", default-features = false, features = ["std"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
 rmcp = { version = "3.11", features = ["server", "transport-io", "transport-streamable-http-server", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,6 +31,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal",
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std", "registry"] }
+unicode-width = "0.2"
 ureq = { version = "3", features = ["json"] }
 url = "2"
 usage = { version = "6", package = "usage-rs", features = ["completions"] }

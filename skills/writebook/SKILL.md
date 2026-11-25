@@ -248,6 +248,11 @@ To replace a picture, overwrite its file in `assets/`.
 - If someone edits the book on the web while you push, the push fails with a
   409 error. Run `writebook pull`, then push again.
 
+## Terminal UI
+
+`writebook tui` is a full-screen interface for people. Don't run it yourself:
+it needs a terminal and waits for key presses. Use the commands above instead.
+
 ## MCP server
 
 `writebook mcp` gives MCP clients, such as Claude, tools that read and change
