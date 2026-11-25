@@ -48,9 +48,11 @@ impl Books {
         Box::new(move || Message::To(id, Reply::Books(data::books(&host))))
     }
 
-    /// The books as loaded.
+    /// The books as loaded, the selection kept on one of them.
     pub fn loaded(&mut self, books: anyhow::Result<Vec<BookCard>>) {
         self.books = Loading::from(books);
+        let count = self.books.ready().map(Vec::len).unwrap_or(0);
+        self.selected = self.selected.min(count.saturating_sub(1));
     }
 
     pub fn covers(&self) -> Vec<String> {
@@ -156,6 +158,7 @@ fn byline(subtitle: Option<&str>, author: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::tui::data::File;
+    use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
@@ -182,6 +185,15 @@ mod tests {
             columns: 1,
             offset: 0,
         }
+    }
+
+    #[test]
+    fn keeps_the_selection_on_a_book_after_a_reload() {
+        let mut screen = books_screen();
+
+        screen.loaded(Ok(vec![card(1, "Handbook", None)]));
+        assert_eq!(screen.selected, 0);
+        assert!(matches!(screen.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Action::Open(1)));
     }
 
     #[test]
