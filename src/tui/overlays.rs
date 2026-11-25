@@ -242,7 +242,7 @@ impl App {
         match question {
             Question::DeleteLeaf { book_id, leaf } => {
                 if matches!(&self.screen, Screen::Leaf(page, _) if page.book_id == book_id) {
-                    self.close_leaf();
+                    self.return_to_book();
                 }
 
                 if let Screen::Book(screen) = &self.screen

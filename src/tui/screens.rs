@@ -276,11 +276,16 @@ impl App {
 
     /// Back to the book, with the page that was open selected.
     pub fn close_leaf(&mut self) {
+        self.return_to_book();
+        self.reload_book();
+    }
+
+    /// Back from the reader to its book, without reloading the book's pages.
+    pub fn return_to_book(&mut self) {
         match self.take_screen() {
             Screen::Leaf(page, mut book) => {
                 book.selected = page.index;
                 self.screen = Screen::Book(book);
-                self.reload_book();
             }
             screen => self.screen = screen,
         }
