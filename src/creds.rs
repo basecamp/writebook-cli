@@ -212,11 +212,14 @@ pub fn stored_access(host: &str, profile: &str) -> Result<Option<Access>> {
     Ok(storage::load(host, profile)?.map(|it| it.access))
 }
 
-/// Whether the token the CLI would send to this site may change books.
+/// Whether the CLI has a token for this site that may change books. No
+/// sign-in can't, and neither can a WRITEBOOK_TOKEN meant for another site,
+/// which is never sent here.
 pub fn can_write(host: &str) -> Result<bool> {
-    match given_token(host)? {
-        Some(token) => Ok(Token::given(token).access == Access::Full),
-        None => Ok(stored_access(host, &inventory::profile_for(host)?)? != Some(Access::ReadOnly)),
+    match given_token(host) {
+        Ok(Some(token)) => Ok(Token::given(token).access == Access::Full),
+        Ok(None) => Ok(stored_access(host, &inventory::profile_for(host)?)? == Some(Access::Full)),
+        Err(_) => Ok(false),
     }
 }
 

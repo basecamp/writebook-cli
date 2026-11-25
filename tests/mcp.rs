@@ -56,21 +56,17 @@ fn a_read_only_token_gets_only_the_tools_that_read() {
 fn reaches_the_instance_a_tool_names() {
     let server = fake_writebook();
     let other = fake_writebook();
-    let mut mcp = Mcp::start(&server, Some("wb_at_secret"));
-    std::fs::write(
-        mcp.config.join("writebook/instances.toml"),
-        format!(
-            "default = \"handbook\"\n[instances.handbook]\nurl = \"{}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n\
-             [instances.other]\nurl = \"{}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n",
-            server.url, other.url
-        ),
-    )
-    .unwrap();
+    let mut mcp = Mcp::start_with(&server, Some("wb_at_secret"), &[&other]);
+
+    // Only handbook has a token, and other is never sent it.
+    let instances = mcp.call("list_instances", json!({}));
+    assert_eq!(instances[0]["alias"], json!("handbook"));
+    assert_eq!(instances[0]["can_change_books"], json!(true));
+    assert_eq!(instances[1]["can_change_books"], json!(false));
 
     mcp.call("search", json!({ "query": "call" }));
     assert!(server.requests().iter().any(|it| it.path.starts_with("/search.json")));
 
-    // WRITEBOOK_TOKEN is for handbook alone, so other is never sent it.
     let elsewhere = mcp.call_failing("search", json!({ "query": "call", "instance": "other" }));
     assert!(elsewhere.contains(&format!("so it is not sent to {}", other.url)), "{elsewhere}");
     assert!(other.requests().is_empty());
@@ -85,9 +81,13 @@ fn says_so_when_not_signed_in_rather_than_reading_only_published_books() {
     let mut mcp = Mcp::start(&server, None);
 
     let refused = mcp.call_failing("list_books", json!({}));
-
     assert!(refused.contains(&format!("you're not signed in to {}", server.url)), "{refused}");
     assert!(server.requests().is_empty());
+
+    let instances = mcp.call("list_instances", json!({}));
+    assert_eq!(instances[0]["can_change_books"], json!(false));
+    let tools = mcp.request("tools/list", json!({}));
+    assert!(!tools.to_string().contains("create_page"), "{tools}");
 }
 
 #[test]
@@ -211,7 +211,6 @@ fn fake_writebook() -> Server {
 /// `writebook mcp` on stdio, with the server added as the instance
 /// "handbook", signed in with the given WRITEBOOK_TOKEN.
 struct Mcp {
-    config: std::path::PathBuf,
     child: Child,
     output: BufReader<ChildStdout>,
     next_id: u64,
@@ -219,13 +218,19 @@ struct Mcp {
 
 impl Mcp {
     fn start(server: &Server, token: Option<&str>) -> Mcp {
+        Mcp::start_with(server, token, &[])
+    }
+
+    /// Like start, with more instances added after handbook: other, other2, …
+    fn start_with(server: &Server, token: Option<&str>, others: &[&Server]) -> Mcp {
         let config = tempdir();
+        let mut inventory = format!("default = \"handbook\"\n{}", instance("handbook", &server.url));
+        for (n, other) in others.iter().enumerate() {
+            let alias = if n == 0 { "other".to_string() } else { format!("other{}", n + 1) };
+            inventory += &instance(&alias, &other.url);
+        }
         std::fs::create_dir_all(config.join("writebook")).unwrap();
-        std::fs::write(
-            config.join("writebook/instances.toml"),
-            format!("default = \"handbook\"\n[instances.handbook]\nurl = \"{}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n", server.url),
-        )
-        .unwrap();
+        std::fs::write(config.join("writebook/instances.toml"), inventory).unwrap();
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_writebook"));
         command.args(["mcp"]).env_remove("WRITEBOOK_TOKEN").env("XDG_CONFIG_HOME", &config);
@@ -242,7 +247,7 @@ impl Mcp {
             .spawn()
             .unwrap();
         let output = BufReader::new(child.stdout.take().unwrap());
-        let mut mcp = Mcp { config, child, output, next_id: 1 };
+        let mut mcp = Mcp { child, output, next_id: 1 };
 
         let params = initialize()["params"].clone();
         mcp.request("initialize", params);
@@ -289,6 +294,10 @@ impl Drop for Mcp {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+fn instance(alias: &str, url: &str) -> String {
+    format!("[instances.{alias}]\nurl = \"{url}\"\ndefault_profile = \"default\"\nprofiles = [\"default\"]\n")
 }
 
 fn initialize() -> Value {
