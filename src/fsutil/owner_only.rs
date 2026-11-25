@@ -8,19 +8,24 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// In three steps, since icacls given them at once leaves entries behind:
+/// drop any added ones, grant the user, then drop the inherited ones.
 pub fn restrict(path: &Path) -> Result<()> {
     let inheritance = if path.is_dir() { "(OI)(CI)" } else { "" };
-    let output = Command::new("icacls")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("*{}:{inheritance}F", current_user()?))
-        .output()
-        .context("could not run icacls")?;
+    let grant = format!("*{}:{inheritance}F", current_user()?);
+
+    icacls(path, &["/reset"])?;
+    icacls(path, &["/grant:r", &grant])?;
+    icacls(path, &["/inheritance:r"])
+}
+
+fn icacls(path: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("icacls").arg(path).args(args).output().context("could not run icacls")?;
 
     if output.status.success() {
         Ok(())
     } else {
-        bail!("could not restrict {} to the current user: {}", path.display(), String::from_utf8_lossy(&output.stderr).trim())
+        bail!("could not restrict {} to the current user: {}", path.display(), String::from_utf8_lossy(&output.stdout).trim())
     }
 }
 
