@@ -100,6 +100,10 @@ in takes these steps:
 If a command needs a sign-in and there is none, the command doesn't wait for
 the user. It fails, and the error message says which command to run.
 
+If you only need to read books, add `--read-only` in step 1. The sign-in can
+read books but can't change them, so `push` fails. The approval page tells
+the user that the device will only be able to read.
+
 ### Tokens
 
 Instead of signing in, you can set two environment variables:
