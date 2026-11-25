@@ -247,3 +247,29 @@ To replace a picture, overwrite its file in `assets/`.
   markers. `pull` and `push` refuse to run while a file has conflict markers.
 - If someone edits the book on the web while you push, the push fails with a
   409 error. Run `writebook pull`, then push again.
+
+## MCP server
+
+`writebook mcp` gives MCP clients, such as Claude, tools that read and change
+books on every instance that the user added. It uses the user's sign-ins. To
+add it to Claude Code:
+
+```sh
+claude mcp add writebook -- writebook mcp
+```
+
+`--read-only` gives only the tools that read.
+
+To give other people's agents access to one instance, run it as a server:
+
+```sh
+writebook mcp --instance https://books.example.com --serve 0.0.0.0:8080
+```
+
+The server doesn't use the user's sign-in. Each request must send a Writebook
+token as a Bearer header. The server sends the token only to that instance. The
+server uses plain HTTP, so put it behind https unless it listens only on this
+computer. The Docker image `ghcr.io/basecamp/writebook-cli` runs the same
+command.
+
+If you already use the CLI, you don't need the MCP server.
