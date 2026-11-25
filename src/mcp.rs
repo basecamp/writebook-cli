@@ -2,9 +2,9 @@
 //!
 //! On stdio it serves the person running it, with their sign-in, for an MCP
 //! client on the same machine. With --server it listens on HTTP for anyone,
-//! and each request brings its own Writebook token, which is only ever sent
-//! to the instance the server was started for. That server keeps no sign-in
-//! of its own, so there is nothing on it to steal or borrow.
+//! and every request must include a Writebook token. The server sends that
+//! token only to the instance it was started for, and doesn't store a login,
+//! so a request without a token can't use anyone else's.
 
 mod tools;
 
@@ -66,8 +66,8 @@ async fn serve_http(host: String, read_only: bool, address: &str) -> Result<()> 
         if read_only { ", read-only" } else { "" }
     );
 
-    // Any Host is let in: Host checks keep a web page from reaching a local
-    // server's stored sign-in, and this server has none.
+    // Allow any Host header. Host checks stop a web page from using a local
+    // server's stored login, and this server doesn't store one.
     let config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(Vec::<String>::new())
         .with_legacy_session_mode(false)
@@ -84,8 +84,8 @@ async fn serve_http(host: String, read_only: bool, address: &str) -> Result<()> 
     Ok(())
 }
 
-/// Turn away a request without a token before it reaches MCP, the way an
-/// MCP client expects to be told to bring one.
+/// Answer 401 to a request without a token before it reaches MCP, which is
+/// how MCP clients expect to be asked for one.
 async fn require_token(request: Request, next: Next) -> Response {
     if bearer(request.headers()).is_some() {
         next.run(request).await
@@ -183,8 +183,8 @@ impl ServerHandler for Writebook {
 
         Ok(match outcome {
             Ok(value) => CallToolResult::success(vec![ContentBlock::text(serde_json::to_string_pretty(&value).unwrap_or_default())]),
-            // The CLI's advice for a rejected token is about its own sign-in,
-            // which isn't the one a caller over HTTP brought.
+            // The CLI's message for a rejected token tells you to sign in
+            // again, which doesn't apply to a token sent over HTTP.
             Err(error) if matches!(self.tokens, Tokens::Bearer) && error.downcast_ref::<api::TokenRejected>().is_some() => {
                 failure(&format!("{} did not accept your Writebook token", self.host))
             }

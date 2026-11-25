@@ -84,7 +84,8 @@ claude mcp add writebook -- writebook mcp
 ```
 
 To serve a Writebook to everyone who uses it, run an MCP server next to it.
-It keeps no sign-in: each person's client sends their own Writebook token.
+It doesn't use your login. Every request must include a Writebook token, and
+the server uses that token to talk to Writebook.
 
 ```sh
 writebook mcp --instance https://books.example.com --server 127.0.0.1:8080

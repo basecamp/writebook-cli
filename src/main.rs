@@ -135,10 +135,11 @@ enum Command {
     Upgrade,
     /// Serve an instance's books to MCP clients. On stdio it uses your
     /// sign-in, for a client on this machine: `claude mcp add writebook --
-    /// writebook mcp`. With --server it listens on HTTP at /mcp, keeps no
-    /// sign-in, and each request brings its own Writebook token as a Bearer
-    /// header, which only ever goes to this instance. It serves plain HTTP, so
-    /// put it behind https unless it only listens on this machine
+    /// writebook mcp`. With --server it listens on HTTP at /mcp and doesn't
+    /// use your login: every request must include a Writebook token as a
+    /// Bearer header, and that token is only sent to this instance. It serves
+    /// plain HTTP, so put it behind https unless it only listens on this
+    /// machine
     #[usage(help_heading = "Agent commands")]
     Mcp {
         /// Instance alias or URL (defaults to the default instance)
