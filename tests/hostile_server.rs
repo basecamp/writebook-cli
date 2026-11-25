@@ -84,7 +84,8 @@ fn keeps_the_token_only_while_redirects_stay_on_the_site() {
         }
         _ => reply(404, ""),
     });
-    let checkout = tempdir().join("checkout");
+    let scratch = tempdir();
+    let checkout = scratch.join("checkout");
 
     let output = writebook(&["clone", &format!("{}/4/handbook", server.url), checkout.to_str().unwrap()], &token_for(&server));
 

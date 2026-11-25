@@ -17,6 +17,8 @@ mod profile;
 mod push;
 mod read;
 mod remote;
+#[cfg(test)]
+mod scratch;
 mod setup;
 mod skill;
 mod status;

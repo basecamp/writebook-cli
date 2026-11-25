@@ -114,7 +114,9 @@ fn a_renewal_narrowed_to_read_only_stops_a_push_before_it_changes_anything() {
     writebook(&["instance", "add", &server.url], &env);
     writebook(&["instance", "add", &server.url, "--code", "WXYZ-2345"], &env);
 
-    let checkout = tempdir().join("handbook");
+    let scratch = tempdir();
+
+    let checkout = scratch.join("handbook");
     let cloned = writebook(&["clone", &format!("{}/4/handbook", server.url), checkout.to_str().unwrap()], &env);
     assert!(cloned.status.success(), "{}", stderr(&cloned));
     std::fs::write(checkout.join("on-call.md"), "Page the person on call.\n").unwrap();
@@ -235,7 +237,7 @@ fn expire_sign_ins(config: &std::path::Path) {
     std::fs::write(&path, credentials.to_string()).unwrap();
 }
 
-fn checkout_of(server: &Server) -> std::path::PathBuf {
+fn checkout_of(server: &Server) -> support::TempDir {
     let checkout = tempdir();
     std::fs::create_dir_all(checkout.join(".writebook")).unwrap();
     std::fs::write(checkout.join(".writebook/config.json"), format!(r#"{{"remotes":{{"origin":{{"url":"{}","book_id":4}}}}}}"#, server.url)).unwrap();

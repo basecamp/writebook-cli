@@ -68,7 +68,7 @@ fn one_command_at_a_time_renews_a_sign_in() {
 
     let commands: Vec<_> = (0..2)
         .map(|_| {
-            let config = config.clone();
+            let config = config.to_path_buf();
             let url = server.url.clone();
             std::thread::spawn(move || writebook(&["book", "list", "--instance", &url], &[("XDG_CONFIG_HOME", config.to_str().unwrap())]))
         })
@@ -164,7 +164,8 @@ fn owner_only_access_list() -> String {
 /// PowerShell 7's module path, inherited in CI, breaks Windows PowerShell's.
 #[cfg(windows)]
 fn powershell(script: &str, argument: &Path) -> String {
-    let file = tempdir().join("script.ps1");
+    let scratch = tempdir();
+    let file = scratch.join("script.ps1");
     std::fs::write(&file, format!("$ErrorActionPreference = 'Stop'\n{script}")).unwrap();
 
     let output = std::process::Command::new("powershell")
@@ -185,7 +186,8 @@ fn never_writes_through_a_file_planted_where_a_temporary_file_goes() {
     let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
     let config = tempdir();
     let folder = config.join("writebook");
-    let target = tempdir().join("target");
+    let scratch = tempdir();
+    let target = scratch.join("target");
     std::fs::create_dir(&folder).unwrap();
     std::fs::write(&target, "untouched").unwrap();
 
