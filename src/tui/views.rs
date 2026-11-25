@@ -1,7 +1,7 @@
 //! Widgets the screens and overlays share: the masthead, breadcrumbs, fields,
 //! buttons, windows, and lists and grids of tiles.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -63,6 +63,19 @@ pub fn input(frame: &mut Frame, area: Rect, label: &str, text: Line<'static>, fo
         .padding(ratatui::widgets::Padding::horizontal(1));
 
     frame.render_widget(Paragraph::new(text).block(block), area);
+}
+
+/// Whether a key types its character: not with ctrl or alt held, unless both
+/// are, which is how Windows sends AltGr.
+pub fn plain(key: KeyEvent) -> bool {
+    let held = key.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT);
+    held.is_empty() || held == KeyModifiers::CONTROL | KeyModifiers::ALT
+}
+
+/// Pasted text for a field of one line: its lines joined by spaces, without
+/// anything that would move the terminal's cursor.
+pub fn one_line(text: &str) -> String {
+    text.split(char::is_control).filter(|it| !it.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 /// What's typed in a field, with the cursor when focused, or its label
@@ -331,10 +344,15 @@ pub fn screen_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn pasted_lines_join_into_one_without_control_characters() {
+        assert_eq!(one_line("~/covers/\r\nsea.png\n"), "~/covers/ sea.png");
+        assert_eq!(one_line("a\x1b[2Jb"), "a [2Jb");
     }
 
     #[test]

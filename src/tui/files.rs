@@ -77,7 +77,7 @@ impl FilePicker {
                     self.go(home, None);
                 }
             }
-            KeyCode::Char(character) => {
+            KeyCode::Char(character) if views::plain(key) => {
                 let filter = format!("{}{character}", self.filter);
                 self.set_filter(filter);
             }

@@ -48,7 +48,7 @@ impl Search {
             KeyCode::Backspace => {
                 self.query.pop();
             }
-            KeyCode::Char(character) => self.query.push(character),
+            KeyCode::Char(character) if views::plain(key) => self.query.push(character),
             _ => {}
         }
 

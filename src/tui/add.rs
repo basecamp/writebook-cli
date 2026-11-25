@@ -135,7 +135,7 @@ impl Form {
                     field.value.pop();
                 }
             }
-            KeyCode::Char(character) => {
+            KeyCode::Char(character) if views::plain(key) => {
                 if let Some(field) = self.typed_field() {
                     field.value.push(character);
                 }

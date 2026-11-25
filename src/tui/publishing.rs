@@ -55,7 +55,7 @@ impl Publishing {
                 KeyCode::Backspace => {
                     slug.pop();
                 }
-                KeyCode::Char(character) => slug.push(character),
+                KeyCode::Char(character) if views::plain(key) => slug.push(character),
                 KeyCode::Enter if !slug.trim().is_empty() => {
                     let slug = std::mem::take(slug);
                     self.editing = None;

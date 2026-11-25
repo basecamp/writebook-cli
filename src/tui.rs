@@ -27,8 +27,8 @@ mod views;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::widgets::Paragraph;
@@ -60,22 +60,51 @@ pub fn run() -> Result<()> {
         anyhow::bail!("writebook tui needs a terminal");
     }
 
+    let mut session = Session { enhanced: false };
     let mut terminal = ratatui::try_init()?;
     let images = Images::detect();
-    let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
 
     // Without it a terminal sends ctrl+i as tab, so both open the instances.
-    if enhanced {
+    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
         crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+        session.enhanced = true;
     }
 
-    let result = App::new(images).run(&mut terminal);
+    leave_on_panic(session.enhanced);
+    App::new(images).run(&mut terminal)
+}
 
+/// The terminal as the TUI set it up, put back however the TUI ends.
+struct Session {
+    /// Whether the keyboard enhancement flags were pushed, to pop them.
+    enhanced: bool,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        leave(self.enhanced);
+    }
+}
+
+/// Put the terminal back, keyboard flags and pasting too, before the panic's
+/// message is printed. ratatui's own hook only restores what it set up.
+fn leave_on_panic(enhanced: bool) {
+    let previous = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        leave(enhanced);
+        previous(info);
+    }));
+}
+
+fn leave(enhanced: bool) {
     if enhanced {
-        crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags)?;
+        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
+
+    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
-    result
 }
 
 pub enum Message {
@@ -223,8 +252,10 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
 
             if event::poll(Duration::from_millis(33))? {
-                if let Event::Key(key) = event::read()? {
-                    self.key(key);
+                match event::read()? {
+                    Event::Key(key) => self.key(key),
+                    Event::Paste(text) => self.paste(&text),
+                    _ => {}
                 }
             }
 
@@ -291,6 +322,28 @@ impl App {
             self.overlay = Some(Overlay::Instances(InstancePicker::new(self.current_instance())));
         } else {
             self.screen_key(key);
+        }
+    }
+
+    /// Pasted text goes into the page editor as it is, and into any other
+    /// field as one line, as if typed.
+    fn paste(&mut self, text: &str) {
+        self.notice = None;
+
+        if self.overlay.is_none()
+            && let Screen::Leaf(page, _) = &mut self.screen
+            && let Some(editor) = &mut page.editor
+        {
+            editor.paste(text);
+        } else if self.typing() {
+            for character in views::one_line(text).chars() {
+                let key = KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE);
+
+                match self.overlay.take() {
+                    Some(overlay) => self.overlay = self.overlay_key(overlay, key),
+                    None => self.screen_key(key),
+                }
+            }
         }
     }
 
@@ -483,6 +536,37 @@ mod tests {
 
         app.receive(Message::Uploaded(HOST.to_string(), 1, 2, Ok("![b.png](/b.png)".to_string())));
         assert!(edited_body(&app).contains("![b.png](/b.png)"));
+    }
+
+    #[test]
+    fn tab_moves_through_the_profile_and_only_ctrl_i_opens_the_instances() {
+        let mut app = App::new(Images::none());
+        let mut page = ProfilePage::new(HOST.to_string());
+        page.loaded(Ok(data::Profile { id: 1, name: "Stanko".to_string(), email: "stanko@example.com".to_string() }));
+        app.screen = Screen::Profile(Box::new(page), Box::new(Screen::Instances(InstancePicker::new(0))));
+
+        app.key(press(KeyCode::Tab));
+        app.key(press(KeyCode::Char('!')));
+        assert!(app.overlay.is_none());
+        assert!(matches!(&app.screen, Screen::Profile(page, _) if page.email() == "stanko@example.com!"));
+
+        app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL));
+        assert!(matches!(app.overlay, Some(Overlay::Instances(_))));
+    }
+
+    #[test]
+    fn pastes_into_the_field_being_typed_in() {
+        let mut app = App::new(Images::none());
+        app.overlay = Some(Overlay::Search(Box::new(Search::new(None, "every book".to_string()))));
+
+        app.paste("white\nrabbit?");
+        let Some(Overlay::Search(search)) = &mut app.overlay else { panic!("the search closed") };
+        assert!(matches!(search.key(press(KeyCode::Enter)), search::Action::Search(query) if query == "white rabbit?"));
+
+        app.screen = editing_page(1);
+        app.overlay = None;
+        app.paste("- one\n- two");
+        assert_eq!(edited_body(&app), "- one\n- two");
     }
 
     #[test]

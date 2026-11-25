@@ -255,7 +255,7 @@ fn type_into(text: &mut String, key: KeyEvent) {
         KeyCode::Backspace => {
             text.pop();
         }
-        KeyCode::Char(character) => text.push(character),
+        KeyCode::Char(character) if views::plain(key) => text.push(character),
         _ => {}
     }
 }

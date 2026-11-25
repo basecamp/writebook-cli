@@ -42,15 +42,15 @@ impl Screen {
         }
     }
 
-    /// Ctrl+i or tab opens the instances over most screens. On the edit
-    /// screen tab moves between fields, so only a real ctrl+i does there, and
+    /// Ctrl+i or tab opens the instances over most screens. On screens with
+    /// fields tab moves between them, so only a real ctrl+i does there, and
     /// moving pages takes every key.
     pub fn opens_instances(&self, key: KeyEvent) -> bool {
         match self {
             Screen::Instances(_) | Screen::Leaf(..) => false,
-            Screen::Edit(..) => key.code != KeyCode::Tab,
+            Screen::Edit(..) | Screen::Profile(..) => key.code != KeyCode::Tab,
             Screen::Book(screen) => !screen.moving(),
-            Screen::Books(_) | Screen::Settings(..) | Screen::Profile(..) => true,
+            Screen::Books(_) | Screen::Settings(..) => true,
         }
     }
 

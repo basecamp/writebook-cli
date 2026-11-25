@@ -55,6 +55,19 @@ impl Editor {
         }
     }
 
+    /// Put pasted text in as it is, without starting list items, in the
+    /// title as one line.
+    pub fn paste(&mut self, text: &str) {
+        if self.on_title {
+            self.title.push_str(&views::one_line(text));
+        } else {
+            let text = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
+            self.insert(&text.replace(|it: char| it.is_control() && it != '\n', ""));
+        }
+
+        self.changed = true;
+    }
+
     /// Put a block, like the Markdown for an uploaded file, on a line of
     /// its own at the cursor.
     pub fn insert_block(&mut self, text: &str) {
@@ -76,6 +89,7 @@ impl Editor {
             KeyCode::Char('s') if control => return Action::Save,
             KeyCode::Char('u') if control => return Action::Upload,
             KeyCode::Esc => return Action::Leave,
+            KeyCode::Char(_) if !views::plain(key) => {}
             KeyCode::Tab | KeyCode::BackTab => self.on_title = !self.on_title,
             _ if self.on_title => self.title_key(key),
             _ => self.body_key(key),
@@ -132,12 +146,13 @@ impl Editor {
         self.changed = true;
     }
 
-    /// Enter in a list starts the next item, and on an empty item ends the
-    /// list instead.
+    /// Enter after a list item's marker starts the next item, and on an
+    /// empty item ends the list instead.
     fn new_line(&mut self) {
         let line: String = self.lines[self.row].iter().collect();
+        let item = list_item(&line).filter(|it| self.column >= line[..line.len() - it.text.len()].chars().count());
 
-        match list_item(&line) {
+        match item {
             Some(item) if item.text.trim().is_empty() => {
                 self.lines[self.row].clear();
                 self.column = 0;
@@ -283,6 +298,7 @@ struct ListItem<'a> {
 }
 
 impl ListItem<'_> {
+
     /// The marker for the item after this one.
     fn next_marker(&self) -> String {
         match (self.bullet, self.number) {
@@ -561,5 +577,48 @@ mod tests {
         assert!(matches!(editor.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)), Action::Save));
         assert!(matches!(editor.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)), Action::Upload));
         assert!(matches!(editor.key(press(KeyCode::Esc)), Action::Leave));
+    }
+
+    #[test]
+    fn ctrl_and_alt_with_a_letter_type_nothing() {
+        let mut editor = Editor::new("", "");
+
+        editor.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        editor.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+        editor.key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::CONTROL | KeyModifiers::ALT));
+        editor.key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert_eq!(editor.body(), "@A");
+    }
+
+    #[test]
+    fn enter_before_a_list_marker_only_breaks_the_line() {
+        let mut editor = Editor::new("", "- milk");
+        editor.key(press(KeyCode::Enter));
+        assert_eq!(editor.body(), "\n- milk");
+
+        let mut editor = Editor::new("", "  12. eggs");
+        editor.key(press(KeyCode::Right));
+        editor.key(press(KeyCode::Right));
+        editor.key(press(KeyCode::Right));
+        editor.key(press(KeyCode::Enter));
+        assert_eq!(editor.body(), "  1\n2. eggs");
+
+        let mut editor = Editor::new("", "- ");
+        editor.key(press(KeyCode::Right));
+        editor.key(press(KeyCode::Enter));
+        assert_eq!(editor.body(), "-\n ", "an empty item ends the list only from after its marker");
+    }
+
+    #[test]
+    fn pastes_text_as_it_is_without_starting_list_items() {
+        let mut editor = Editor::new("", "- ");
+        editor.key(press(KeyCode::End));
+        editor.paste("one\r\n- two\n\tthree\x1b[2J");
+        assert_eq!(editor.body(), "- one\n- two\n    three[2J");
+        assert!(editor.changed());
+
+        editor.key(press(KeyCode::Tab));
+        editor.paste("A\ntitle\n");
+        assert_eq!(editor.title, "A title");
     }
 }

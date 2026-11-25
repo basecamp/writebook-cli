@@ -92,7 +92,7 @@ impl ProfilePage {
             KeyCode::Backspace if self.typing() => {
                 self.fields[self.focus].pop();
             }
-            KeyCode::Char(character) if self.typing() => self.fields[self.focus].push(character),
+            KeyCode::Char(character) if self.typing() && views::plain(key) => self.fields[self.focus].push(character),
             _ => {}
         }
 
