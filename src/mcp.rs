@@ -158,8 +158,8 @@ impl Connection {
     fn web(&self) -> Result<Web> {
         let token = match &self.bearer {
             Some(token) => token.clone(),
-            None => match creds::existing_access_token(&self.host)? {
-                Some(token) => token,
+            None => match creds::signed_in_token(&self.host)? {
+                Some(token) => token.value,
                 None => bail!(
                     "you're not signed in to {}. Sign in with `{}`",
                     self.host,
