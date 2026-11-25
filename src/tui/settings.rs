@@ -8,6 +8,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use super::data::{self, People, Person};
 use super::{Id, Loading, Message, Reply, Request, next_id, views};
@@ -205,7 +206,7 @@ fn person_line(person: &Person, selected: bool, can_administer: bool, width: u16
     let role = if can_administer && !person.current { format!("‹ {role} ›") } else { role.to_string() };
 
     let marker = if selected { "› " } else { "  " };
-    let used = marker.chars().count() + name.chars().count() + role.chars().count() + 2;
+    let used = marker.width() + name.width() + role.width() + 2;
     let dots = ".".repeat(usize::from(width).saturating_sub(used));
 
     let name = Span::from(format!("{marker}{name}"));
@@ -235,6 +236,13 @@ mod tests {
             ],
         });
         page
+    }
+
+    #[test]
+    fn dots_fill_a_row_to_the_width_with_wide_characters_in_the_name() {
+        let person = Person { id: 3, name: "山田太郎".to_string(), role: "member".to_string(), current: false };
+
+        assert_eq!(person_line(&person, false, false, 30).width(), 30);
     }
 
     #[test]

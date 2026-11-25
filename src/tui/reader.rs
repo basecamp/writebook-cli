@@ -8,6 +8,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use super::confirm::{Confirm, Question};
 use super::data::{self, Book, Leaf, LeafContent};
@@ -438,7 +439,7 @@ impl Index {
         for (index, leaf) in page.leaves.iter().enumerate().skip(self.offset).take(fit) {
             let title = if leaf.title.is_empty() { "Untitled".to_string() } else { leaf.title.clone() };
             let marker = if index == selected { "› " } else { "  " };
-            let dots = ".".repeat(usize::from(width).saturating_sub(title.chars().count() + 5));
+            let dots = ".".repeat(usize::from(width).saturating_sub(title.width() + 5));
             let style = if leaf.is_section() { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
             let style = if index == selected { style.fg(Color::Blue).add_modifier(Modifier::BOLD) } else { style };
             let here = if index == page.index { " ◂" } else { "" };

@@ -8,6 +8,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::data::{self, BookForm, Role};
 use super::images::{Images, Source};
@@ -350,7 +351,7 @@ fn draw_access(frame: &mut Frame, area: Rect, form: &BookForm, focused: Option<F
 /// when it can.
 fn row(width: u16, name: &str, value: &str, focused: bool, changeable: bool) -> Line<'static> {
     let value = if changeable { format!("‹ {value} ›") } else { value.to_string() };
-    let used = name.chars().count() + value.chars().count() + 4;
+    let used = name.width() + value.width() + 4;
     let dots = ".".repeat(usize::from(width).saturating_sub(used));
     let marker = if focused { "› " } else { "  " };
 
