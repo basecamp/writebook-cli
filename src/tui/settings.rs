@@ -9,9 +9,8 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
-use super::Loading;
-use super::data::{People, Person};
-use super::views;
+use super::data::{self, People, Person};
+use super::{Loading, Message, Request, views};
 
 pub struct SettingsPage {
     pub host: String,
@@ -33,6 +32,38 @@ pub enum Action {
 impl SettingsPage {
     pub fn new(host: String) -> SettingsPage {
         SettingsPage { host, people: Loading::Pending, selected: 0, qr: false }
+    }
+
+    pub fn load(&self) -> Request {
+        let host = self.host.clone();
+
+        Box::new(move || {
+            let people = data::people(&host);
+            Message::People(host, people)
+        })
+    }
+
+    pub fn set_role(&self, person_id: u64, administrator: bool) -> Request {
+        let host = self.host.clone();
+        Box::new(move || Message::PeopleChanged(data::set_role(&host, person_id, administrator)))
+    }
+
+    pub fn remove_selected(&self) -> Option<Request> {
+        let person_id = self.selected()?.id;
+        let host = self.host.clone();
+
+        Some(Box::new(move || Message::PeopleChanged(data::remove_person(&host, person_id))))
+    }
+
+    pub fn reset_invite(&self) -> Request {
+        let host = self.host.clone();
+        Box::new(move || Message::InviteReset(data::reset_invite(&host)))
+    }
+
+    pub fn invite_reset(&mut self, url: String) {
+        if let Loading::Ready(people) = &mut self.people {
+            people.join_url = Some(url);
+        }
     }
 
     pub fn selected(&self) -> Option<&Person> {
@@ -102,7 +133,10 @@ impl SettingsPage {
         bindings
     }
 
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    /// The people below breadcrumbs from the instance, named by `instance`.
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect, instance: &str) {
+        let area = views::breadcrumbs(frame, area, &[instance, "Settings"]);
+
         let people = match &self.people {
             Loading::Ready(people) => people,
             Loading::Pending => return views::placeholder(frame, area, "Loading…"),

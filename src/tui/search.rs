@@ -6,10 +6,11 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
-use super::Loading;
+use super::{Loading, views};
 use super::data::Found;
+use super::help::Binding;
 use crate::web;
 
 
@@ -75,7 +76,7 @@ impl Search {
         }
     }
 
-    pub fn bindings(&self) -> Vec<(&'static str, &'static str)> {
+    pub fn bindings(&self) -> Vec<Binding> {
         let fresh = self.searched.as_deref() == Some(self.query.trim()) && self.found().is_some_and(|it| !it.is_empty());
 
         if fresh {
@@ -86,21 +87,7 @@ impl Search {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let window = Rect {
-            x: area.x + area.width / 12,
-            y: area.y + area.height / 10,
-            width: area.width - area.width / 6,
-            height: area.height - area.height / 5,
-        };
-        frame.render_widget(Clear, window);
-
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Blue))
-            .title(format!(" Search {} ", self.scope).bold())
-            .padding(ratatui::widgets::Padding::horizontal(1));
-        let inside = block.inner(window);
-        frame.render_widget(block, window);
+        let inside = views::large_window(frame, area, &format!(" Search {} ", self.scope));
 
         let [input, _, results] = Layout::vertical([Constraint::Length(3), Constraint::Length(1), Constraint::Fill(1)]).areas(inside);
         let field = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::DarkGray)).padding(ratatui::widgets::Padding::horizontal(1));

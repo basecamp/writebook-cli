@@ -1,0 +1,289 @@
+//! Handing the overlays keys and drawing them over the screen.
+
+use anyhow::Result;
+use crossterm::event::KeyEvent;
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use std::path::PathBuf;
+
+use super::add::{self, Add};
+use super::confirm::Question;
+use super::data::{self, Found, Publication};
+use super::files::{self, FilePicker, Picked};
+use super::help::Binding;
+use super::{App, Loading, Message, Overlay, Purpose, Screen, instances, publishing, reader, search};
+
+impl Overlay {
+    /// Whether keys go into a text field, where ? is just a character.
+    pub fn typing(&self) -> bool {
+        match self {
+            Overlay::Add(add) => add.typing(),
+            Overlay::Publishing(publishing) => publishing.typing(),
+            Overlay::Files(..) | Overlay::Search(_) => true,
+            Overlay::Instances(_) | Overlay::Index(_) | Overlay::Confirm(_) => false,
+        }
+    }
+
+    pub fn bindings(&self) -> Vec<Binding> {
+        match self {
+            Overlay::Instances(picker) => picker.overlay_bindings(),
+            Overlay::Add(add) => add.bindings(),
+            Overlay::Publishing(publishing) => publishing.bindings(),
+            Overlay::Files(picker, _) => picker.bindings(),
+            Overlay::Search(search) => search.bindings(),
+            Overlay::Index(index) => index.bindings(),
+            Overlay::Confirm(confirm) => confirm.bindings(),
+        }
+    }
+}
+
+impl App {
+    pub fn draw_overlay(&mut self, frame: &mut Frame, area: Rect) {
+        match &mut self.overlay {
+            Some(Overlay::Instances(picker)) => picker.draw(frame, area, &self.instances),
+            Some(Overlay::Add(add)) => add.draw(frame, area),
+            Some(Overlay::Publishing(publishing)) => publishing.draw(frame, area),
+            Some(Overlay::Files(picker, _)) => picker.draw(frame, area, &mut self.images),
+            Some(Overlay::Search(search)) => search.draw(frame, area),
+            Some(Overlay::Index(index)) => {
+                if let Screen::Leaf(page, _) = &self.screen {
+                    index.draw(frame, area, page);
+                }
+            }
+            Some(Overlay::Confirm(confirm)) => confirm.draw(frame, area, &self.screen),
+            None => {}
+        }
+    }
+
+    pub fn overlay_key(&mut self, overlay: Overlay, key: KeyEvent) -> Option<Overlay> {
+        match overlay {
+            Overlay::Instances(mut picker) => {
+                let count = self.instances.ready().map(Vec::len).unwrap_or(0);
+
+                match picker.key(key, count) {
+                    instances::Action::Nothing => Some(Overlay::Instances(picker)),
+                    instances::Action::Close => None,
+                    instances::Action::Open(index) => {
+                        self.open_instance(index);
+                        None
+                    }
+                }
+            }
+            Overlay::Add(mut add) => match add.key(key) {
+                add::Action::Nothing => Some(Overlay::Add(add)),
+                add::Action::Close => None,
+                add::Action::ChooseFile => Some(self.file_picker("Choose a picture", files::IMAGES, Purpose::Picture(Box::new(add)))),
+                add::Action::Submit => self.submit(add),
+            },
+            Overlay::Publishing(mut publishing) => match publishing.key(key) {
+                publishing::Action::Nothing => Some(Overlay::Publishing(publishing)),
+                publishing::Action::Close => None,
+                publishing::Action::Copy(url) => {
+                    self.copy(url);
+                    Some(Overlay::Publishing(publishing))
+                }
+                publishing::Action::Request(request) => {
+                    self.spawn(request);
+                    Some(Overlay::Publishing(publishing))
+                }
+            },
+            Overlay::Files(mut picker, purpose) => match picker.key(key) {
+                Picked::Nothing => {
+                    self.want_preview(&picker);
+                    Some(Overlay::Files(picker, purpose))
+                }
+                Picked::Cancel => purpose.back(),
+                Picked::File(path) => {
+                    self.files_dir = picker.dir().to_path_buf();
+                    self.picked(path, purpose)
+                }
+            },
+            Overlay::Search(mut search) => match search.key(key) {
+                search::Action::Nothing => Some(Overlay::Search(search)),
+                search::Action::Close => None,
+                search::Action::Search(query) => {
+                    self.search(search.book_id, query);
+                    Some(Overlay::Search(search))
+                }
+                search::Action::Open(found) => {
+                    self.open_found(found);
+                    None
+                }
+            },
+            Overlay::Index(mut index) => match &mut self.screen {
+                Screen::Leaf(page, _) => match index.key(key, page) {
+                    reader::IndexAction::Nothing => Some(Overlay::Index(index)),
+                    reader::IndexAction::Close => None,
+                    reader::IndexAction::Turned(request) => {
+                        self.spawn(request);
+                        None
+                    }
+                },
+                _ => None,
+            },
+            Overlay::Confirm(mut confirm) => match confirm.answer(key) {
+                Some(true) => {
+                    self.confirmed(confirm.question);
+                    None
+                }
+                Some(false) => match confirm.question {
+                    Question::Quit(previous) => previous.map(|it| *it),
+                    _ => None,
+                },
+                None => Some(Overlay::Confirm(confirm)),
+            },
+        }
+    }
+
+    /// Add the page, picture or section once every field is filled in.
+    fn submit(&mut self, add: Add) -> Option<Overlay> {
+        match add.new_leaf() {
+            Some(leaf) => {
+                if let Screen::Book(screen) = &self.screen {
+                    self.spawn(screen.add(leaf));
+                }
+                None
+            }
+            None => {
+                self.notice = Some("Fill in every field first.".to_string());
+                Some(Overlay::Add(add))
+            }
+        }
+    }
+
+    fn want_preview(&mut self, picker: &FilePicker) {
+        if let Some(file) = picker.selected_file() {
+            self.images.want_file(&file, &self.sender);
+        }
+    }
+
+    /// Put the picked file where it was wanted, and go back there.
+    fn picked(&mut self, path: PathBuf, purpose: Purpose) -> Option<Overlay> {
+        match purpose {
+            Purpose::Cover => {
+                if let Screen::Edit(page, _) = &mut self.screen {
+                    page.use_cover(path);
+                }
+                None
+            }
+            Purpose::Upload => {
+                self.upload(path);
+                None
+            }
+            Purpose::Picture(mut add) => {
+                add.use_file(&path);
+                Some(Overlay::Add(*add))
+            }
+        }
+    }
+
+    fn upload(&mut self, path: PathBuf) {
+        if let Screen::Leaf(page, _) = &self.screen {
+            let uploading = format!("Uploading {}…", path.display());
+
+            match page.upload(path) {
+                Some(request) => {
+                    self.notice = Some(uploading);
+                    self.spawn(request);
+                }
+                None => self.notice = Some("Files can only go into a page.".to_string()),
+            }
+        }
+    }
+
+    fn search(&self, book_id: Option<u64>, query: String) {
+        if let Some(host) = self.screen.host() {
+            let host = host.to_string();
+            self.spawn(move || Message::Found(data::search(&host, book_id, &query)));
+        }
+    }
+
+    /// Show the page a search found: select it in this book, or open its book.
+    fn open_found(&mut self, found: Found) {
+        let Some(book_id) = found.book_id else { return };
+
+        match &mut self.screen {
+            Screen::Book(screen) if screen.book_id == book_id => {
+                if let Some(leaf_id) = found.leaf_id {
+                    screen.select_leaf(leaf_id);
+                }
+            }
+            Screen::Books(_) => {
+                self.open_book(book_id);
+
+                if let Screen::Book(screen) = &mut self.screen {
+                    screen.pending_leaf = found.leaf_id;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn confirmed(&mut self, question: Question) {
+        match question {
+            Question::DeleteLeaf => {
+                if matches!(self.screen, Screen::Leaf(..)) {
+                    self.close_leaf();
+                }
+
+                if let Screen::Book(screen) = &self.screen
+                    && let Some(request) = screen.delete_selected()
+                {
+                    self.spawn(request);
+                }
+            }
+            Question::DeleteBook => {
+                if let Screen::Edit(page, _) = &mut self.screen
+                    && let Some(request) = page.delete()
+                {
+                    self.spawn(request);
+                }
+            }
+            Question::Discard => {
+                if let Screen::Leaf(page, _) = &mut self.screen {
+                    page.editor = None;
+                }
+            }
+            Question::RemovePerson => {
+                if let Screen::Settings(page, _) = &self.screen
+                    && let Some(request) = page.remove_selected()
+                {
+                    self.spawn(request);
+                }
+            }
+            Question::ResetInvite => {
+                if let Screen::Settings(page, _) = &self.screen {
+                    self.spawn(page.reset_invite());
+                }
+            }
+            Question::Quit(_) => self.done = true,
+        }
+    }
+
+    pub fn file_picker(&mut self, title: &'static str, kinds: &'static [&'static str], purpose: Purpose) -> Overlay {
+        let picker = FilePicker::new(title, kinds, self.files_dir.clone());
+        self.want_preview(&picker);
+        Overlay::Files(Box::new(picker), purpose)
+    }
+
+    pub fn published(&mut self, result: Result<Publication>) {
+        if let Some(Overlay::Publishing(publishing)) = &mut self.overlay {
+            publishing.finished(&result);
+        }
+
+        match result {
+            Ok(publication) => {
+                if let Screen::Book(screen) = &mut self.screen {
+                    screen.published(publication);
+                }
+            }
+            Err(error) => self.show_error(error),
+        }
+    }
+
+    pub fn found(&mut self, found: Result<Vec<Found>>) {
+        if let Some(Overlay::Search(search)) = &mut self.overlay {
+            search.results = Some(Loading::from(found));
+        }
+    }
+}

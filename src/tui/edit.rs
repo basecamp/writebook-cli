@@ -9,10 +9,10 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Wrap};
 
-use super::data::{BookForm, Role};
+use super::data::{self, BookForm, Role};
 use super::files;
 use super::images::Images;
-use super::{Loading, theme, views};
+use super::{Loading, Message, Request, theme, views};
 
 const THEMES: [&str; 7] = ["black", "blue", "green", "magenta", "orange", "violet", "white"];
 
@@ -51,6 +51,37 @@ pub enum Action {
 impl EditPage {
     pub fn new(host: String, name: String, book_id: Option<u64>) -> EditPage {
         EditPage { host, book_id, name, form: Loading::Pending, focus: 1, saving: false }
+    }
+
+    pub fn load(&self) -> Request {
+        let host = self.host.clone();
+        let book_id = self.book_id;
+
+        Box::new(move || Message::Form(data::book_form(&host, book_id)))
+    }
+
+    /// Why the book can't be saved as it is.
+    pub fn problem(&self) -> Option<&'static str> {
+        match self.form.ready() {
+            Some(form) if form.title.trim().is_empty() => Some("A book needs a title."),
+            _ => None,
+        }
+    }
+
+    pub fn save(&mut self) -> Option<Request> {
+        let form = self.form.ready().cloned()?;
+        let host = self.host.clone();
+        self.saving = true;
+
+        Some(Box::new(move || Message::Saved(data::save_book(&host, &form))))
+    }
+
+    pub fn delete(&mut self) -> Option<Request> {
+        let book_id = self.book_id?;
+        let host = self.host.clone();
+        self.saving = true;
+
+        Some(Box::new(move || Message::BookDeleted(data::delete_book(&host, book_id))))
     }
 
     /// The keys for the focused field.
@@ -137,6 +168,13 @@ impl EditPage {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
+        let title = self.form.ready().map(|it| it.title.clone()).filter(|it| !it.is_empty() && self.book_id.is_some());
+        let last = if self.book_id.is_some() { "Edit" } else { "New book" };
+        let mut steps = vec![self.name.as_str(), "Books"];
+        steps.extend(title.as_deref());
+        steps.push(last);
+        let area = views::breadcrumbs(frame, area, &steps);
+
         let form = match &self.form {
             Loading::Ready(form) => form,
             Loading::Pending => return views::placeholder(frame, area, "Loading…"),

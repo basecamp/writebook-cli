@@ -8,9 +8,8 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use super::Loading;
-use super::data::Profile;
-use super::views;
+use super::data::{self, Profile};
+use super::{Loading, Message, Request, views};
 
 pub struct ProfilePage {
     pub host: String,
@@ -34,6 +33,15 @@ pub enum Action {
 impl ProfilePage {
     pub fn new(host: String) -> ProfilePage {
         ProfilePage { host, profile: Loading::Pending, fields: Default::default(), original_email: String::new(), focus: 0, saving: false }
+    }
+
+    pub fn load(&self) -> Request {
+        let host = self.host.clone();
+
+        Box::new(move || {
+            let profile = data::profile(&host);
+            Message::ProfileLoaded(host, profile)
+        })
     }
 
     pub fn loaded(&mut self, profile: anyhow::Result<Profile>) {
@@ -109,6 +117,29 @@ impl ProfilePage {
         self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
     }
 
+    /// Why the profile can't be saved as it is.
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.name().is_empty() || self.email().is_empty() {
+            Some("Your name and email can't be empty.")
+        } else if self.needs_current_password() && self.current_password().is_empty() {
+            Some("Fill in your current password to change your email or password.")
+        } else {
+            None
+        }
+    }
+
+    pub fn save(&mut self) -> Option<Request> {
+        let id = self.profile.ready()?.id;
+        let host = self.host.clone();
+        let name = self.name().to_string();
+        let email = self.email().to_string();
+        let password = self.password().to_string();
+        let current = self.current_password().to_string();
+        self.saving = true;
+
+        Some(Box::new(move || Message::ProfileSaved(data::save_profile(&host, id, &name, &email, &password, &current))))
+    }
+
     /// After saving, the passwords are cleared and the email is the saved one.
     pub fn saved(&mut self) {
         self.original_email = self.email().to_string();
@@ -122,7 +153,10 @@ impl ProfilePage {
         vec![("tab", "next"), ("enter", enter), ("esc", "settings"), ("ctrl+s", "save")]
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+    /// The profile below breadcrumbs from the instance, named by `instance`.
+    pub fn draw(&self, frame: &mut Frame, area: Rect, instance: &str) {
+        let name = self.profile.ready().map(|it| it.name.clone()).unwrap_or_default();
+        let area = views::breadcrumbs(frame, area, &[instance, "Settings", name.as_str()]);
         match &self.profile {
             Loading::Pending => return views::placeholder(frame, area, "Loading…"),
             Loading::Failed(error) => return views::failure(frame, area, error),

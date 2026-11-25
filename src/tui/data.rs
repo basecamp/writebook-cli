@@ -183,8 +183,12 @@ pub fn publish(host: &str, book_id: u64, published: bool, slug: &str) -> Result<
 }
 
 fn client(host: &str) -> Result<api::Client> {
+    Ok(api::Client::with_token(host, token(host)?))
+}
+
+fn token(host: &str) -> Result<creds::Token> {
     match creds::signed_in_token(host)? {
-        Some(token) => Ok(api::Client::with_token(host, token)),
+        Some(token) => Ok(token),
         None => bail!(
             "you're not signed in to {host}. Sign in with `{}`",
             inventory::sign_in_command(host, &inventory::profile_for(host)?)
@@ -337,11 +341,7 @@ fn escaped(text: &str) -> String {
 
 /// Search one book, or every book on the instance.
 pub fn search(host: &str, book_id: Option<u64>, query: &str) -> Result<Vec<Found>> {
-    let token = match creds::signed_in_token(host)? {
-        Some(token) => token.value,
-        None => bail!("you're not signed in to {host}. Sign in with `{}`", inventory::sign_in_command(host, &inventory::profile_for(host)?)),
-    };
-    let web = crate::web::Web::new(host, Some(token));
+    let web = crate::web::Web::new(host, Some(token(host)?.value));
 
     Ok(crate::read::find(&web, book_id, query)?
         .into_iter()

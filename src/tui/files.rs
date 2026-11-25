@@ -4,12 +4,14 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::{Color, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use std::path::{Path, PathBuf};
 
+use super::help::Binding;
 use super::images::Images;
+use super::views;
 
 pub const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 
@@ -92,22 +94,12 @@ impl FilePicker {
         (!entry.folder).then(|| self.dir.join(&entry.name))
     }
 
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
-        let window = Rect {
-            x: area.x + area.width / 12,
-            y: area.y + area.height / 10,
-            width: area.width - area.width / 6,
-            height: area.height - area.height / 5,
-        };
-        frame.render_widget(Clear, window);
+    pub fn bindings(&self) -> Vec<Binding> {
+        vec![("type", "find"), ("↑↓", "select"), ("enter", "open"), ("←", "up a folder"), ("~", "home"), ("esc", "cancel")]
+    }
 
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Blue))
-            .title(format!(" {} ", self.title).bold())
-            .padding(ratatui::widgets::Padding::horizontal(1));
-        let inside = block.inner(window);
-        frame.render_widget(block, window);
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
+        let inside = views::large_window(frame, area, &format!(" {} ", self.title));
 
         let [location, filter, _, body] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inside);
