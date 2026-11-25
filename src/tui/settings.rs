@@ -149,7 +149,7 @@ impl SettingsPage {
         let area = Rect { x: area.x + (area.width - width) / 2, width, ..area };
         let invite_height = match (&people.join_url, self.qr) {
             (None, _) => 0,
-            (Some(url), true) => 6 + views::qr_lines(url).len() as u16,
+            (Some(url), true) => 6 + views::qr_lines(url, &self.host).len() as u16,
             (Some(_), false) => 5,
         };
         let [invite, _, list] = Layout::vertical([Constraint::Length(invite_height), Constraint::Length(1), Constraint::Fill(1)]).areas(area);
@@ -159,7 +159,7 @@ impl SettingsPage {
 
             if self.qr {
                 lines.push(Line::default());
-                lines.extend(views::qr_lines(url).into_iter().map(Line::centered));
+                lines.extend(views::qr_lines(url, &self.host).into_iter().map(Line::centered));
             }
 
             let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::DarkGray));

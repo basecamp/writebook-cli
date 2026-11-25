@@ -121,7 +121,7 @@ impl Publishing {
 
         if self.qr && self.published {
             lines.push(Line::from(""));
-            lines.extend(views::qr_lines(&self.url));
+            lines.extend(views::qr_lines(&self.url, &self.host));
         }
 
         if self.saving {

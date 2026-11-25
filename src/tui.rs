@@ -336,9 +336,17 @@ impl App {
         self.notice = Some(format!("{error:#}"));
     }
 
-    fn copy(&mut self, text: String) {
-        clipboard::copy(&text);
-        self.notice = Some(format!("Copied {text}"));
+    /// Copy a link Writebook gave, once it's sure to be one to this instance.
+    fn copy(&mut self, url: String) {
+        let host = self.screen.host().unwrap_or_default();
+
+        match clipboard::shareable(&url, host) {
+            Ok(()) => {
+                clipboard::copy(&url);
+                self.notice = Some(format!("Copied {url}"));
+            }
+            Err(error) => self.show_error(error),
+        }
     }
 }
 

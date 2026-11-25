@@ -8,6 +8,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
+use super::clipboard;
 use super::data::Leaf;
 use super::theme;
 
@@ -270,8 +271,13 @@ pub fn choice_line(label: &str, chosen: bool) -> Line<'static> {
     }
 }
 
-pub fn qr_lines(url: &str) -> Vec<Line<'static>> {
+/// A QR code for a link on the instance at `host`, or why there's none.
+pub fn qr_lines(url: &str, host: &str) -> Vec<Line<'static>> {
     use qrcode::render::unicode::Dense1x2;
+
+    if let Err(error) = clipboard::shareable(url, host) {
+        return vec![Line::from(error.to_string()).red()];
+    }
 
     match qrcode::QrCode::new(url) {
         Ok(code) => code
@@ -329,6 +335,15 @@ mod tests {
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn draws_a_qr_code_only_for_a_link_on_the_instance() {
+        assert!(qr_lines("https://books.example.com/join/abc", "https://books.example.com").len() > 10);
+        assert_eq!(
+            qr_lines("https://evil.example.org/join/abc", "https://books.example.com"),
+            [Line::from("Writebook's link goes to another site, so it isn't shared").red()]
+        );
     }
 
     #[test]
