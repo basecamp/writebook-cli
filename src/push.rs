@@ -127,7 +127,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
             Ok(id)
         }
         Entry::Picture { caption, filename } => {
-            let bytes = std::fs::read(checkout.working_path(filename))
+            let bytes = std::fs::read(checkout.working_path(filename)?)
                 .with_context(|| format!("could not read {filename}"))?;
             let basename = filename.strip_prefix("assets/").unwrap_or(filename);
 
@@ -200,7 +200,7 @@ fn update_leaf(
             update_state_leaf(state, leaf);
         }
         Entry::Picture { caption, filename } => {
-            let bytes = std::fs::read(checkout.working_path(filename))
+            let bytes = std::fs::read(checkout.working_path(filename)?)
                 .with_context(|| format!("could not read {filename}"))?;
             let image_changed = Some(checkout::sha256(&bytes)) != known.image_sha256;
 
@@ -270,7 +270,7 @@ fn push_page_body(
     let mut renamed = false;
 
     for name in merge::referenced_assets(&body) {
-        let path = checkout.working_path(&format!("assets/{name}"));
+        let path = checkout.working_path(&format!("assets/{name}"))?;
         let bytes = std::fs::read(&path).with_context(|| format!("could not read assets/{name}"))?;
         let sha256 = checkout::sha256(&bytes);
 
@@ -294,7 +294,7 @@ fn push_page_body(
             .to_string();
 
         if slug != name {
-            let target = checkout.working_path(&format!("assets/{slug}"));
+            let target = checkout.working_path(&format!("assets/{slug}"))?;
 
             if index_uses(checkout, &format!("assets/{name}"))? {
                 std::fs::copy(&path, &target).with_context(|| format!("could not copy assets/{name}"))?;
@@ -419,12 +419,12 @@ fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, 
             }
         }
         Some(filename) => {
-            let bytes = std::fs::read(checkout.working_path(filename)).with_context(|| format!("could not read the cover, {filename}"))?;
+            let bytes = std::fs::read(checkout.working_path(filename)?).with_context(|| format!("could not read the cover, {filename}"))?;
             upload_cover(client, state, book_id, filename, &bytes)?;
         }
         None => {
             if let Some(tracked) = state.cover.clone() {
-                match std::fs::read(checkout.working_path(&tracked.filename)) {
+                match std::fs::read(checkout.working_path(&tracked.filename)?) {
                     Ok(bytes) => upload_cover(client, state, book_id, &tracked.filename, &bytes)?,
                     Err(_) => remove_cover(client, state, book_id)?,
                 }

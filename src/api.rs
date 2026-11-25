@@ -9,16 +9,47 @@ use crate::creds;
 
 const USER_AGENT: &str = concat!("writebook-cli/", env!("CARGO_PKG_VERSION"));
 const DOWNLOAD_LIMIT: u64 = 512 * 1024 * 1024;
+const MAX_REDIRECTS: usize = 5;
 
 pub fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_connect(Some(std::time::Duration::from_secs(10)))
         .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
-        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
+        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::Never)
         .user_agent(USER_AGENT)
         .build()
         .new_agent()
+}
+
+fn agent_without_redirects() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
+        .user_agent(USER_AGENT)
+        .build()
+        .new_agent()
+}
+
+/// The scheme, host, and port of a URL, like https://books.example.com.
+fn origin_of(url: &str) -> String {
+    let after_scheme = url.find("://").map(|it| it + 3).unwrap_or_default();
+    let end = url[after_scheme..].find(['/', '?', '#']).map(|it| it + after_scheme).unwrap_or(url.len());
+
+    url[..end].to_lowercase()
+}
+
+/// Where a redirect leads, read relative to the URL that answered with it.
+fn redirect_target(from: &str, location: &str) -> Result<String> {
+    let target = url::Url::parse(from)?.join(location).with_context(|| format!("{from} redirected to {location:?}"))?;
+
+    if matches!(target.scheme(), "https" | "http") {
+        Ok(target.into())
+    } else {
+        anyhow::bail!("{from} redirected to {location:?}, which isn't a web address")
+    }
 }
 
 /// A non-2xx API response. Push inspects the status to tell a stale-write
@@ -145,7 +176,7 @@ impl Client {
     }
 
     fn send(&self, method: &str, path: &str, body: Option<&Value>) -> Result<ureq::http::Response<ureq::Body>> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let authorization = format!("Bearer {}", self.token);
 
         let response = match (method, body) {
@@ -175,12 +206,30 @@ impl Client {
         response.with_context(|| format!("could not reach {}", self.host))
     }
 
+    /// Writebook answers a download with a redirect or two, to the stored
+    /// file. The token goes along only while they stay on this site (same
+    /// scheme, host, and port); a file served from elsewhere, like S3, gets
+    /// a signed URL that needs no token.
     fn send_download(&self, path: &str) -> Result<ureq::http::Response<ureq::Body>> {
-        agent()
-            .get(&self.url(path))
-            .header("Authorization", &format!("Bearer {}", self.token))
-            .call()
-            .with_context(|| format!("could not reach {}", self.host))
+        let agent = agent_without_redirects();
+        let mut url = self.url(path)?;
+
+        for _ in 0..MAX_REDIRECTS {
+            let mut request = agent.get(&url);
+
+            if origin_of(&url) == self.host {
+                request = request.header("Authorization", &format!("Bearer {}", self.token));
+            }
+
+            let response = request.call().with_context(|| format!("could not reach {}", self.host))?;
+
+            match response.headers().get("location").and_then(|it| it.to_str().ok()) {
+                Some(location) if response.status().is_redirection() => url = redirect_target(&url, location)?,
+                _ => return Ok(response),
+            }
+        }
+
+        anyhow::bail!("{} redirected {path} too many times", self.host)
     }
 
     fn multipart_request(&self, path: &str, content_type: &str, body: &[u8]) -> Result<ureq::http::Response<ureq::Body>> {
@@ -188,7 +237,7 @@ impl Client {
     }
 
     fn multipart_request_with(&self, method: &str, path: &str, content_type: &str, body: &[u8]) -> Result<ureq::http::Response<ureq::Body>> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let authorization = format!("Bearer {}", self.token);
 
         let response = match method {
@@ -215,12 +264,19 @@ impl Client {
         Ok(())
     }
 
-    fn url(&self, path: &str) -> String {
-        if path.starts_with("http://") || path.starts_with("https://") {
-            path.to_string()
-        } else {
-            format!("{}{}", self.host, path)
-        }
+    fn url(&self, path: &str) -> Result<String> {
+        url_on(&self.host, path)
+    }
+}
+
+/// A path on the host as a full URL. Paths come from the server too (image
+/// URLs in a manifest), and the token goes wherever they point, so only a
+/// path on this host is taken: never a full URL or a `//other.host` one.
+pub fn url_on(host: &str, path: &str) -> Result<String> {
+    if path.starts_with('/') && !path.starts_with("//") && !path.contains('\\') {
+        Ok(format!("{host}{path}"))
+    } else {
+        anyhow::bail!("refusing to request {path:?}: only paths on {host} are requested")
     }
 }
 

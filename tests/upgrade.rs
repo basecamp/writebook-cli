@@ -26,9 +26,10 @@ fn upgrades_only_mise_installs_through_mise() {
     assert!(!mise.with_extension("args").exists());
 
     let executable = install_like_mise(&dir);
-    let output = Command::new(&executable).arg("upgrade").env("PATH", &dir).output().unwrap();
+    let output = Command::new(&executable).arg("upgrade").env("PATH", &dir).env("WRITEBOOK_TOKEN", "secret").output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(fs::read_to_string(mise.with_extension("args")).unwrap(), "upgrade github:basecamp/writebook-cli\n");
+    assert!(!fs::read_to_string(mise.with_extension("env")).unwrap().contains("secret"), "mise never sees the token");
 
     fake_mise(&dir, 1);
     let output = Command::new(&executable).arg("upgrade").env("PATH", &dir).output().unwrap();
@@ -38,7 +39,7 @@ fn upgrades_only_mise_installs_through_mise() {
 
 fn fake_mise(dir: &Path, exit_code: u8) -> PathBuf {
     let mise = dir.join("mise");
-    fs::write(&mise, format!("#!/bin/sh\necho \"$@\" > \"$0.args\"\nexit {exit_code}\n")).unwrap();
+    fs::write(&mise, format!("#!/bin/sh\necho \"$@\" > \"$0.args\"\nexport -p > \"$0.env\"\nexit {exit_code}\n")).unwrap();
     fs::set_permissions(&mise, fs::Permissions::from_mode(0o755)).unwrap();
     mise
 }

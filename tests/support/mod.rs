@@ -34,6 +34,18 @@ pub fn reply(status: u16, body: &str) -> Reply {
     Reply { status, headers: Vec::new(), body: body.to_string() }
 }
 
+/// Writebook's answer to starting a sign-in, with the link on the host asked.
+pub fn device_authorization(request: &Request) -> Reply {
+    let link = format!("http://{}/oauth/device_verification", request.header("Host").unwrap());
+
+    reply(
+        200,
+        &format!(
+            r#"{{"device_code":"wb_dc_secret","user_code":"ABCD-EFGH","verification_uri":"{link}","verification_uri_complete":"{link}?user_code=ABCD-EFGH","expires_in":600,"interval":5}}"#
+        ),
+    )
+}
+
 pub fn redirect(location: &str) -> Reply {
     Reply { status: 302, headers: vec![("Location", location.to_string())], body: String::new() }
 }
@@ -113,10 +125,16 @@ fn read_request(stream: &mut std::net::TcpStream) -> Option<Request> {
 /// Run the CLI with no terminal attached, an empty config dir, and only the
 /// environment given (no WRITEBOOK_TOKEN leaking in from the developer's shell).
 pub fn writebook(args: &[&str], env: &[(&str, &str)]) -> Output {
+    writebook_in(&std::env::current_dir().unwrap(), args, env)
+}
+
+/// Like writebook, run in the given directory.
+pub fn writebook_in(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let config = tempdir();
     let mut command = Command::new(env!("CARGO_BIN_EXE_writebook"));
 
     command
+        .current_dir(dir)
         .args(args)
         .env_remove("WRITEBOOK_TOKEN")
         .env_remove("WRITEBOOK_TOKEN_HOST")
@@ -136,9 +154,13 @@ pub fn writebook(args: &[&str], env: &[(&str, &str)]) -> Output {
     command.output().unwrap()
 }
 
+/// Tests run side by side, so the counter keeps two from getting the same one.
 pub fn tempdir() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("writebook-test-{}-{nanos}", std::process::id()));
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("writebook-test-{}-{nanos}-{count}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

@@ -16,14 +16,18 @@ pub fn run(url: &str, directory: Option<&Path>) -> Result<()> {
 
     let root = match directory {
         Some(directory) => directory.to_path_buf(),
-        None => PathBuf::from(&manifest.book.slug),
+        None => PathBuf::from(directory_for(&manifest.book.slug, book_id)),
     };
+
+    if fs::symlink_metadata(&root).is_ok_and(|it| it.file_type().is_symlink()) {
+        bail!("{} is a symlink; clone into a directory instead", root.display());
+    }
 
     if root.exists() && fs::read_dir(&root).context("could not inspect the target directory")?.next().is_some() {
         bail!("{} already exists and is not empty", root.display());
     }
 
-    println!("Cloning \"{}\" into {}...", manifest.book.title, root.display());
+    crate::output::print_line(&format!("Cloning \"{}\" into {}...", manifest.book.title, root.display()));
 
     let checkout = Checkout::create(&root)?;
 
@@ -50,4 +54,16 @@ pub fn run(url: &str, directory: Option<&Path>) -> Result<()> {
 
     println!("Done: {} leaves.", manifest.leaves.len());
     Ok(())
+}
+
+/// The book's slug names the directory, but it comes from the server, so it
+/// only gets to name one directory right here.
+fn directory_for(slug: &str, book_id: u64) -> String {
+    let name = sync::sanitize_filename(slug);
+
+    if name.is_empty() {
+        format!("book-{book_id}")
+    } else {
+        name
+    }
 }

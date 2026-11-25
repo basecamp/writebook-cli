@@ -18,7 +18,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use super::{
-    CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, config_dir, credentials_from, error_description, now,
+    CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, config_dir, credentials_from, ensure_private_connection, error_description, now,
     post_token_request, request_device_authorization, someone_can_approve, storage, string_field,
 };
 use crate::{fsutil, inventory};
@@ -49,6 +49,8 @@ enum Attempt {
 /// steps, finishing with the approval code. False when only the first step
 /// is done.
 pub fn sign_in(host: &str, profile: &str, code: Option<&str>) -> Result<bool> {
+    ensure_private_connection(host)?;
+
     match code {
         Some(code) => finish_pending(host, profile, code).map(|_| true),
         None if someone_can_approve() => at_terminal(host, profile).map(|_| true),
@@ -126,7 +128,7 @@ fn start_pending(host: &str, profile: &str) -> Result<()> {
 
     let mut file = load_pending()?;
     file.sign_ins.insert(pending_key(host, profile), pending.clone());
-    fsutil::write_secret_json(&pending_path(), &file)?;
+    fsutil::write_json_privately(&pending_path()?, &file)?;
 
     let minutes = pending.expires_at.saturating_sub(now()).div_ceil(60);
 
@@ -153,7 +155,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
 
     if pending.expires_at <= now() {
         file.sign_ins.remove(&key);
-        fsutil::write_secret_json(&pending_path(), &file)?;
+        fsutil::write_json_privately(&pending_path()?, &file)?;
         bail!("the sign-in link for {host} has expired. Start again with `{login}`");
     }
 
@@ -161,7 +163,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
         Attempt::SignedIn(credentials) => {
             storage::save(host, profile, &credentials)?;
             file.sign_ins.remove(&key);
-            fsutil::write_secret_json(&pending_path(), &file)?;
+            fsutil::write_json_privately(&pending_path()?, &file)?;
             println!("Signed in to {host}.");
             Ok(())
         }
@@ -172,13 +174,29 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
 
 fn start(host: &str) -> Result<Pending> {
     let authorization = request_device_authorization(host)?;
+    let user_code = string_field(&authorization, "user_code")?;
+    let link = string_field(&authorization, "verification_uri_complete")?;
+
+    if !user_code.chars().all(|it| it.is_ascii_alphanumeric() || it == '-') {
+        bail!("{host} sent a sign-in code that isn't one: {user_code:?}");
+    }
+
+    // The link is opened in a browser, which hands it to whatever handles
+    // its scheme, so it has to be a page of the same Writebook.
+    if !link.starts_with(&format!("{host}/")) {
+        bail!("{host} sent a sign-in link to somewhere else, so it wasn't opened: {link:?}");
+    }
+
+    if link.chars().any(char::is_control) {
+        bail!("{host} sent a sign-in link with control characters in it, so it wasn't opened: {link:?}");
+    }
 
     Ok(Pending {
         device_code: string_field(&authorization, "device_code")?,
-        user_code: string_field(&authorization, "user_code")?,
-        link: string_field(&authorization, "verification_uri_complete")?,
+        user_code,
+        link,
         expires_at: now() + authorization["expires_in"].as_u64().unwrap_or(600),
-        interval: authorization["interval"].as_u64().unwrap_or(5),
+        interval: authorization["interval"].as_u64().unwrap_or(5).max(1),
     })
 }
 
@@ -274,10 +292,34 @@ fn open_in_browser(url: &str) {
 
     let _ = command
         .arg(url)
+        .env_remove("WRITEBOOK_TOKEN")
+        .env_remove("WRITEBOOK_TOKEN_HOST")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Drop a sign-in that was started but never finished.
+pub(super) fn forget_pending(host: &str, profile: &str) -> Result<()> {
+    forget_pending_where(|key| key == pending_key(host, profile))
+}
+
+/// Drop every sign-in to a site that was started but never finished.
+pub(super) fn forget_all_pending(host: &str) -> Result<()> {
+    forget_pending_where(|key| key.starts_with(&pending_key(host, "")))
+}
+
+fn forget_pending_where(matches: impl Fn(&str) -> bool) -> Result<()> {
+    let mut file = load_pending()?;
+    let before = file.sign_ins.len();
+    file.sign_ins.retain(|key, _| !matches(key));
+
+    if file.sign_ins.len() != before {
+        fsutil::write_json_privately(&pending_path()?, &file)?;
+    }
+
+    Ok(())
 }
 
 fn pending_key(host: &str, profile: &str) -> String {
@@ -285,7 +327,7 @@ fn pending_key(host: &str, profile: &str) -> String {
 }
 
 fn load_pending() -> Result<PendingFile> {
-    let path = pending_path();
+    let path = pending_path()?;
 
     if path.exists() {
         let contents = fsutil::read_to_string(&path)?;
@@ -295,6 +337,6 @@ fn load_pending() -> Result<PendingFile> {
     }
 }
 
-fn pending_path() -> PathBuf {
-    config_dir().join("pending-sign-ins.json")
+fn pending_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("pending-sign-ins.json"))
 }

@@ -124,7 +124,7 @@ pub fn read(url: &str, format: Format) -> Result<()> {
             ];
             output::print_json(&document, &breadcrumbs, jq.as_deref())?;
         }
-        _ => print!("{}", as_markdown(&document)),
+        _ => output::print_text(&as_markdown(&document)),
     }
 
     Ok(())
@@ -164,9 +164,9 @@ fn print_books_table(books: &[Book]) {
 fn print_books_markdown(books: &[Book]) {
     for book in books {
         if book.author.is_empty() {
-            println!("- [{}]({})", book.title, book.url);
+            output::print_line(&format!("- [{}]({})", book.title, book.url));
         } else {
-            println!("- [{}]({}) by {}", book.title, book.url, book.author);
+            output::print_line(&format!("- [{}]({}) by {}", book.title, book.url, book.author));
         }
     }
 }
@@ -220,7 +220,7 @@ pub fn contents(book: &str, instance: Option<&str>, format: Format) -> Result<()
             ];
             output::print_json(&contents, &breadcrumbs, jq.as_deref())?;
         }
-        _ if contents.leaves.is_empty() => println!("{} has no pages yet.", contents.title),
+        _ if contents.leaves.is_empty() => output::print_line(&format!("{} has no pages yet.", contents.title)),
         Format::Table => print_contents_table(&contents),
         Format::Markdown => print_contents_markdown(&contents),
     }
@@ -251,14 +251,14 @@ fn print_contents_table(contents: &Contents) {
 }
 
 fn print_contents_markdown(contents: &Contents) {
-    println!("# [{}]({})", contents.title, contents.url);
+    output::print_line(&format!("# [{}]({})", contents.title, contents.url));
     println!();
 
     for (number, leaf) in contents.leaves.iter().enumerate() {
         if leaf.kind == "page" {
-            println!("{}. [{}]({})", number + 1, leaf.title, leaf.url);
+            output::print_line(&format!("{}. [{}]({})", number + 1, leaf.title, leaf.url));
         } else {
-            println!("{}. [{}]({}) ({})", number + 1, leaf.title, leaf.url, leaf.kind);
+            output::print_line(&format!("{}. [{}]({}) ({})", number + 1, leaf.title, leaf.url, leaf.kind));
         }
     }
 }
@@ -320,7 +320,7 @@ fn print_hits_table(hits: &[Hit]) {
 fn print_hits_markdown(hits: &[Hit]) {
     for hit in hits {
         let book = if hit.book.is_empty() { String::new() } else { format!(" ({})", hit.book) };
-        println!("- [{}]({}){book}: {}", hit.title, hit.url, hit.snippet);
+        output::print_line(&format!("- [{}]({}){book}: {}", hit.title, hit.url, hit.snippet));
     }
 }
 

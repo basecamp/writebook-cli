@@ -302,7 +302,7 @@ fn main() {
     }
 
     if let Err(error) = run(Cli::parse()) {
-        eprintln!("error: {error:#}");
+        eprintln!("error: {}", output::terminal_safe(&format!("{error:#}")));
         std::process::exit(1);
     }
 }

@@ -130,7 +130,7 @@ pub fn materialize_leaf(
 
             let filename = claim_filename(format!("assets/{}", sanitize_filename(&image.filename)), taken);
             let bytes = client.download(&image.url)?;
-            fsutil::write_atomically(&checkout.working_path(&filename), &bytes)?;
+            fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
 
             state.leaves.push(LeafState {
                 id: leaf.id,
@@ -152,7 +152,7 @@ pub fn materialize_leaf(
 /// Download every /u/ upload a page body references that assets/ doesn't hold yet.
 pub fn mirror_uploads(client: &mut api::Client, checkout: &Checkout, state: &mut State, localized_body: &str) -> Result<()> {
     for slug in merge::referenced_assets(localized_body) {
-        let path = checkout.working_path(&format!("assets/{slug}"));
+        let path = checkout.working_path(&format!("assets/{slug}"))?;
 
         if state.uploads.contains_key(&slug) && path.exists() {
             continue;
@@ -208,11 +208,11 @@ pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut S
 
             if let Some(current) = &current {
                 if current.filename != filename && !used_by_pages_or_pictures(state, &current.filename) {
-                    let _ = std::fs::remove_file(checkout.working_path(&current.filename));
+                    let _ = std::fs::remove_file(checkout.working_path(&current.filename)?);
                 }
             }
 
-            fsutil::write_atomically(&checkout.working_path(&filename), &bytes)?;
+            fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
 
             state.cover = Some(checkout::CoverState {
                 filename,
@@ -227,7 +227,7 @@ pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut S
             }
 
             if !used_by_pages_or_pictures(state, &current.filename) {
-                let _ = std::fs::remove_file(checkout.working_path(&current.filename));
+                let _ = std::fs::remove_file(checkout.working_path(&current.filename)?);
             }
 
             state.cover = None;
@@ -246,7 +246,7 @@ fn used_by_pages_or_pictures(state: &State, filename: &str) -> bool {
 }
 
 fn cover_modified_locally(checkout: &Checkout, cover: &checkout::CoverState) -> bool {
-    match std::fs::read(checkout.working_path(&cover.filename)) {
+    match checkout.read_working_bytes(&cover.filename) {
         Ok(bytes) => checkout::sha256(&bytes) != cover.sha256,
         Err(_) => false,
     }
@@ -274,5 +274,5 @@ pub fn sanitize_filename(filename: &str) -> String {
         .map(|it| if it.is_alphanumeric() || it == '.' || it == '-' || it == '_' { it } else { '-' })
         .collect();
 
-    cleaned.trim_matches('-').to_string()
+    cleaned.trim_start_matches(['-', '.']).trim_end_matches('-').to_string()
 }

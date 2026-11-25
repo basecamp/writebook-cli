@@ -194,7 +194,7 @@ fn apply_section_body(
                 eprintln!("warning: section \"{}\" lost its body remotely, but {filename} is modified locally — keeping your file", content.title);
                 Ok(Some(filename))
             } else {
-                let _ = std::fs::remove_file(checkout.working_path(&filename));
+                let _ = std::fs::remove_file(checkout.working_path(&filename)?);
                 checkout.remove_base(&filename)?;
                 state.leaves[position].filename = None;
                 Ok(None)
@@ -217,7 +217,7 @@ fn apply_picture_image(
     match (&content.image, current.filename) {
         (Some(image), Some(filename)) => {
             if Some(&image.checksum) != current.image_remote_checksum.as_ref() {
-                let modified = match std::fs::read(checkout.working_path(&filename)) {
+                let modified = match std::fs::read(checkout.working_path(&filename)?) {
                     Ok(bytes) => Some(crate::checkout::sha256(&bytes)) != current.image_sha256,
                     Err(_) => false,
                 };
@@ -226,7 +226,7 @@ fn apply_picture_image(
                     eprintln!("warning: {filename} changed both locally and remotely — keeping your copy");
                 } else {
                     let bytes = client.download(&image.url)?;
-                    crate::fsutil::write_atomically(&checkout.working_path(&filename), &bytes)?;
+                    crate::fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
                     state.leaves[position].image_sha256 = Some(crate::checkout::sha256(&bytes));
                     state.leaves[position].image_remote_checksum = Some(image.checksum.clone());
                 }
@@ -237,7 +237,7 @@ fn apply_picture_image(
         (Some(image), None) => {
             let filename = sync::claim_filename(format!("assets/{}", sync::sanitize_filename(&image.filename)), taken);
             let bytes = client.download(&image.url)?;
-            crate::fsutil::write_atomically(&checkout.working_path(&filename), &bytes)?;
+            crate::fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
 
             state.leaves[position].filename = Some(filename.clone());
             state.leaves[position].image_sha256 = Some(crate::checkout::sha256(&bytes));
@@ -282,7 +282,7 @@ fn carry_over_deleted_leaves(
             }
         } else {
             if let Some(filename) = &leaf.filename {
-                let _ = std::fs::remove_file(checkout.working_path(filename));
+                let _ = std::fs::remove_file(checkout.working_path(filename)?);
             }
         }
 

@@ -9,14 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use support::{Server, reply, stderr, stdout, writebook};
 
-const AUTHORIZATION: &str = r#"{"device_code":"wb_dc_secret","user_code":"ABCD-EFGH","verification_uri":"http://x/oauth/device_verification","verification_uri_complete":"http://x/oauth/device_verification?user_code=ABCD-EFGH","expires_in":600,"interval":5}"#;
-
 /// Each sign-in gets its own access token: wb_at_1, wb_at_2, and so on.
 fn fake_writebook() -> Server {
     let sign_ins = Arc::new(AtomicUsize::new(0));
 
     Server::start(move |request| match (request.method.as_str(), request.path.as_str()) {
-        ("POST", "/oauth/device_authorizations") => reply(200, AUTHORIZATION),
+        ("POST", "/oauth/device_authorizations") => support::device_authorization(request),
         ("POST", "/oauth/tokens") => {
             let number = sign_ins.fetch_add(1, Ordering::SeqCst) + 1;
             reply(200, &format!(r#"{{"access_token":"wb_at_{number}","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_{number}"}}"#))

@@ -64,12 +64,30 @@ pub fn print_json<T: Serialize>(data: &T, breadcrumbs: &[Breadcrumb], jq: Option
 
 /// Columns padded to line up, two spaces apart. The first row is the header.
 pub fn print_table<const COLUMNS: usize>(rows: &[[String; COLUMNS]]) {
+    let rows: Vec<Vec<String>> = rows.iter().map(|row| row.iter().map(|cell| terminal_safe(cell)).collect()).collect();
     let widths: Vec<usize> = (0..COLUMNS).map(|column| rows.iter().map(|row| row[column].chars().count()).max().unwrap_or(0)).collect();
 
     for row in rows {
         let cells: Vec<String> = row.iter().zip(&widths).map(|(cell, width)| format!("{cell:width$}")).collect();
         println!("{}", cells.join("  ").trim_end());
     }
+}
+
+/// Print text that came from a server, as a line.
+pub fn print_line(text: &str) {
+    println!("{}", terminal_safe(text));
+}
+
+/// Print text that came from a server, as it is.
+pub fn print_text(text: &str) {
+    print!("{}", terminal_safe(text));
+}
+
+/// Text without control characters, other than line breaks and tabs. A
+/// server could otherwise send escape sequences that rewrite what the
+/// terminal shows, or worse.
+pub fn terminal_safe(text: &str) -> String {
+    text.chars().filter(|it| !it.is_control() || matches!(it, '\n' | '\t')).collect()
 }
 
 fn check_filter(filter: &str) -> Result<()> {
