@@ -13,6 +13,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use super::markdown::{CODE, HEADING};
 use super::views;
+use unicode_width::UnicodeWidthChar;
 
 pub struct Editor {
     pub title: String,
@@ -235,7 +236,7 @@ impl Editor {
 
         let lines = self.visual_lines(usize::from(inside.width.max(1)));
         let height = usize::from(inside.height);
-        let cursor = lines.iter().position(|it| it.cursor.is_some()).unwrap_or(0);
+        let cursor = lines.iter().position(|it| it.cursor).unwrap_or(0);
 
         if cursor < self.scroll {
             self.scroll = cursor;
@@ -247,37 +248,49 @@ impl Editor {
         frame.render_widget(Paragraph::new(shown), inside);
     }
 
-    /// Each line styled as Markdown, then cut to the width, with the cursor
-    /// drawn where it is.
+    /// Each line styled as Markdown, then cut to the width on screen, with
+    /// the cursor drawn where it is. A cursor at the end of a full line goes
+    /// on a row of its own, so it shows.
     fn visual_lines(&self, width: usize) -> Vec<VisualLine> {
         let mut visual = Vec::new();
+        let reversed = Style::default().add_modifier(Modifier::REVERSED);
 
         for (row, line) in self.lines.iter().enumerate() {
             let styles = markdown_styles(line);
-            let mut start = 0;
+            let cursor_at = (!self.on_title && row == self.row).then_some(self.column);
+            let mut spans: Vec<Span> = Vec::new();
+            let mut used = 0;
+            let mut cursor = false;
 
-            loop {
-                let end = (start + width).min(line.len());
-                let cursor_here = !self.on_title && row == self.row && self.column >= start && (self.column < end || (self.column == end && (end == line.len())));
-                let cursor = cursor_here.then(|| self.column - start);
+            for (index, character) in line.iter().enumerate() {
+                let character_width = character.width().unwrap_or(0);
 
-                let mut spans: Vec<Span> = (start..end).map(|index| Span::styled(line[index].to_string(), styles[index])).collect();
-
-                if let Some(at) = cursor {
-                    if at < spans.len() {
-                        spans[at] = spans[at].clone().patch_style(Style::default().add_modifier(Modifier::REVERSED));
-                    } else {
-                        spans.push(Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)));
-                    }
+                if used + character_width > width && !spans.is_empty() {
+                    visual.push(VisualLine { line: Line::from(std::mem::take(&mut spans)), cursor });
+                    used = 0;
+                    cursor = false;
                 }
 
-                visual.push(VisualLine { line: Line::from(spans), cursor });
-
-                if end >= line.len() {
-                    break;
+                if cursor_at == Some(index) {
+                    spans.push(Span::styled(character.to_string(), styles[index].patch(reversed)));
+                    cursor = true;
+                } else {
+                    spans.push(Span::styled(character.to_string(), styles[index]));
                 }
-                start = end;
+
+                used += character_width;
             }
+
+            if cursor_at == Some(line.len()) {
+                if used >= width {
+                    visual.push(VisualLine { line: Line::from(std::mem::take(&mut spans)), cursor });
+                }
+
+                spans.push(Span::styled(" ", reversed));
+                cursor = true;
+            }
+
+            visual.push(VisualLine { line: Line::from(spans), cursor });
         }
 
         visual
@@ -286,7 +299,7 @@ impl Editor {
 
 struct VisualLine {
     line: Line<'static>,
-    cursor: Option<usize>,
+    cursor: bool,
 }
 
 /// A line that's an item of a list: its indent, its marker, and its text.
@@ -577,6 +590,26 @@ mod tests {
         assert!(matches!(editor.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)), Action::Save));
         assert!(matches!(editor.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)), Action::Upload));
         assert!(matches!(editor.key(press(KeyCode::Esc)), Action::Leave));
+    }
+
+    fn drawn(editor: &mut Editor) -> ratatui::Terminal<ratatui::backend::TestBackend> {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(14, 10)).unwrap();
+        terminal.draw(|frame| editor.draw(frame, frame.area())).unwrap();
+        terminal
+    }
+
+    #[test]
+    fn wraps_by_the_width_on_screen_and_shows_the_cursor_after_a_full_line() {
+        let mut editor = Editor::new("", "abcdefghij\n日本語のテキスト");
+        editor.key(press(KeyCode::End));
+
+        let terminal = drawn(&mut editor);
+        let text = views::screen_text(&terminal);
+        assert_eq!(text[5], "│ abcdefghij │");
+        assert_eq!(text[6], "│            │");
+        assert!(terminal.backend().buffer()[(2, 6)].modifier.contains(Modifier::REVERSED), "the cursor is on a row of its own");
+        assert_eq!(text[7].replace(' ', ""), "│日本語のテ│");
+        assert_eq!(text[8].replace(' ', ""), "│キスト│");
     }
 
     #[test]

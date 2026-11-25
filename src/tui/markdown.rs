@@ -5,6 +5,7 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// How tall an image in a page is drawn.
 pub const IMAGE_HEIGHT: u16 = 14;
@@ -39,10 +40,11 @@ struct Renderer {
     rows: Vec<Row>,
     spans: Vec<Span<'static>>,
     styles: Vec<Style>,
-    /// What starts each line of the current block: list bullets, quote bars.
+    /// What starts each line of the current block: list indents, quote bars.
     prefixes: Vec<String>,
-    /// The bullet for the next line, replacing its indent once.
-    bullet: Option<String>,
+    /// The bullets for the next line, each in place of its item's prefix,
+    /// by the prefix's position.
+    bullets: Vec<(usize, String)>,
     lists: Vec<Option<u64>>,
     code_block: bool,
     image: Option<String>,
@@ -111,7 +113,7 @@ impl Renderer {
                     }
                     _ => "• ".to_string(),
                 };
-                self.bullet = Some(bullet);
+                self.bullets.push((self.prefixes.len(), bullet));
                 self.prefixes.push("   ".to_string());
             }
             Tag::Emphasis => self.styles.push(self.style().add_modifier(Modifier::ITALIC)),
@@ -119,6 +121,9 @@ impl Renderer {
             Tag::Strikethrough => self.styles.push(self.style().add_modifier(Modifier::CROSSED_OUT)),
             Tag::Link { .. } => self.styles.push(self.style().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)),
             Tag::Image { dest_url, .. } => self.image = Some(dest_url.to_string()),
+            Tag::Table(_) => self.flush(),
+            Tag::TableHead => self.styles.push(self.style().add_modifier(Modifier::BOLD)),
+            Tag::TableCell if !self.spans.is_empty() => self.spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray))),
             _ => {}
         }
     }
@@ -162,6 +167,12 @@ impl Renderer {
             TagEnd::Link => {
                 self.styles.pop();
             }
+            TagEnd::TableHead => {
+                self.flush();
+                self.styles.pop();
+            }
+            TagEnd::TableRow => self.flush(),
+            TagEnd::Table => self.blank(),
             TagEnd::Image => {
                 if let Some(url) = self.image.take() {
                     self.flush();
@@ -194,10 +205,13 @@ impl Renderer {
         }
 
         let indent = self.prefixes.concat();
-        let first = match self.bullet.take() {
-            Some(bullet) => format!("{}{bullet}", &indent[..indent.len().saturating_sub(3)]),
-            None => indent.clone(),
-        };
+        let mut first = self.prefixes.clone();
+
+        for (position, bullet) in self.bullets.drain(..) {
+            first[position] = bullet;
+        }
+
+        let first = first.concat();
         let spans = std::mem::take(&mut self.spans);
 
         for line in wrap(spans, self.width, &first, &indent) {
@@ -206,37 +220,63 @@ impl Renderer {
     }
 }
 
-/// Break styled text into lines no wider than the width, at spaces when it
-/// can, the first line after `first` and the rest after `rest`.
+/// Break styled text into lines no wider than the width on screen, at spaces
+/// when it can and inside words too long for a line, the first line after
+/// `first` and the rest after `rest`.
 pub fn wrap(spans: Vec<Span<'static>>, width: usize, first: &str, rest: &str) -> Vec<Line<'static>> {
     let prefix_style = Style::default().fg(Color::DarkGray);
     let mut lines = Vec::new();
     let mut line: Vec<Span<'static>> = vec![Span::styled(first.to_string(), prefix_style)];
-    let mut used = first.chars().count();
+    let mut used = first.width();
+    let room = width.saturating_sub(rest.width()).max(1);
 
     for span in spans {
         let style = span.style;
 
         for word in split_keeping_spaces(&span.content) {
-            let length = word.chars().count();
+            for piece in pieces(word, room) {
+                let length = piece.width();
 
-            if used + length > width && used > rest.chars().count() {
-                lines.push(Line::from(std::mem::take(&mut line)));
-                line.push(Span::styled(rest.to_string(), prefix_style));
-                used = rest.chars().count();
+                if used + length > width && used > rest.width() {
+                    lines.push(Line::from(std::mem::take(&mut line)));
+                    line.push(Span::styled(rest.to_string(), prefix_style));
+                    used = rest.width();
 
-                if word.trim().is_empty() {
-                    continue;
+                    if piece.trim().is_empty() {
+                        continue;
+                    }
                 }
-            }
 
-            line.push(Span::styled(word.to_string(), style));
-            used += length;
+                line.push(Span::styled(piece.to_string(), style));
+                used += length;
+            }
         }
     }
 
     lines.push(Line::from(line));
     lines
+}
+
+/// A word in pieces no wider than the room, or whole when it fits.
+fn pieces(word: &str, room: usize) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    let mut used = 0;
+
+    for (index, character) in word.char_indices() {
+        let width = character.width().unwrap_or(0);
+
+        if used + width > room && index > start {
+            pieces.push(&word[start..index]);
+            start = index;
+            used = 0;
+        }
+
+        used += width;
+    }
+
+    pieces.push(&word[start..]);
+    pieces
 }
 
 /// Words with the spaces after them, so wrapping keeps the spacing.
@@ -291,6 +331,33 @@ mod tests {
                 "│ Quoted",
             ]
         );
+    }
+
+    #[test]
+    fn puts_the_bullets_of_nested_items_and_quotes_in_items_on_their_first_line() {
+        assert_eq!(text(&render("- > Quoted in a list\n  > still quoted", 40)), ["• │ Quoted in a list still quoted"]);
+        assert_eq!(text(&render("- - inner\n  - next\n- outer", 40)), ["• • inner", "   • next", "• outer"]);
+        assert_eq!(text(&render("1. > a quote that wraps here", 14)), ["1. │ a quote ", "   │ that ", "   │ wraps ", "   │ here"]);
+    }
+
+    #[test]
+    fn wraps_by_the_width_on_screen_and_breaks_words_too_long_for_a_line() {
+        assert_eq!(text(&render("日本語のテキスト です", 10)), ["日本語のテ", "キスト ", "です"]);
+        assert_eq!(text(&render("see https://example.com/a/very/long/path ok", 12)), ["see ", "https://exam", "ple.com/a/ve", "ry/long/path", "ok"]);
+
+        let rows = render("- **abcdefghijklmnop**", 10);
+        assert_eq!(text(&rows), ["• abcdefg", "   hijklmn", "   op"]);
+        let Row::Text(line) = &rows[1] else { panic!("a line") };
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn renders_a_table_a_row_to_a_line_with_its_cells_apart() {
+        let rows = render("| Name | Role |\n|------|------|\n| Ann | Editor |\n| Bob | Reader |\n\nAfter", 40);
+
+        assert_eq!(text(&rows), ["Name │ Role", "Ann │ Editor", "Bob │ Reader", "", "After"]);
+        let Row::Text(head) = &rows[0] else { panic!("a line") };
+        assert!(head.spans[1].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
