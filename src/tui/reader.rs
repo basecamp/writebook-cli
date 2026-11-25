@@ -313,7 +313,8 @@ impl LeafPage {
 /// Draw the page's rows scrolled down by `scroll` lines, as far as they go.
 /// Returns the scroll, kept from going past the end.
 fn draw_rows(frame: &mut Frame, area: Rect, host: &str, rows: &[Row], scroll: usize, images: &mut Images) -> usize {
-    let heights: Vec<u16> = rows.iter().map(row_height).collect();
+    let image_height = markdown::IMAGE_HEIGHT.min(area.height);
+    let heights: Vec<u16> = rows.iter().map(|it| row_height(it, image_height)).collect();
     let total: usize = heights.iter().map(|it| usize::from(*it)).sum();
     let scroll = scroll.min(total.saturating_sub(usize::from(area.height)));
 
@@ -322,7 +323,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, host: &str, rows: &[Row], scroll: us
 
         match &rows[shown.index] {
             Row::Text(line) => frame.render_widget(Paragraph::new(line.clone()), room),
-            Row::Image { url } if shown.height == usize::from(markdown::IMAGE_HEIGHT) => {
+            Row::Image { url } if shown.height == usize::from(image_height) => {
                 if !images.draw_left(frame, room, &Source::remote(host, url)) {
                     frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()), room);
                 }
@@ -450,10 +451,10 @@ fn centered_image(area: Rect) -> Rect {
     Rect { x: area.x + (area.width - width) / 2, width, ..area }
 }
 
-fn row_height(row: &Row) -> u16 {
+fn row_height(row: &Row, image_height: u16) -> u16 {
     match row {
         Row::Text(_) => 1,
-        Row::Image { .. } => markdown::IMAGE_HEIGHT,
+        Row::Image { .. } => image_height,
     }
 }
 
@@ -508,6 +509,16 @@ mod tests {
         page.scroll = usize::MAX;
 
         assert!(drawn(&mut page).iter().any(|it| it.trim() == "Last line"));
+    }
+
+    #[test]
+    fn a_picture_shows_in_a_page_shorter_than_its_height() {
+        let mut page = page("![Diagram](/u/diagram.png)");
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        let mut images = Images::none();
+        terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images)).unwrap();
+
+        assert!(views::screen_text(&terminal).iter().any(|it| it.trim() == "Loading the picture…"));
     }
 
     #[test]
