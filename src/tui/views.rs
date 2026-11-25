@@ -220,13 +220,23 @@ pub fn discard(frame: &mut Frame, area: Rect, confirm: Confirm) {
     window(frame, area, " Stop editing ", lines, 50);
 }
 
+pub fn remove_person(frame: &mut Frame, area: Rect, name: &str, confirm: Confirm) {
+    let lines = vec![Line::from(format!("Remove {name}?")), Line::from("They won't be able to sign in any more.").dim(), Line::from(""), choices(confirm)];
+    window(frame, area, " Remove ", lines, 50);
+}
+
+pub fn reset_invite(frame: &mut Frame, area: Rect, confirm: Confirm) {
+    let lines = vec![Line::from("Make a new invite link?"), Line::from("The current link will stop working.").dim(), Line::from(""), choices(confirm)];
+    window(frame, area, " New invite link ", lines, 50);
+}
+
 pub fn quit(frame: &mut Frame, area: Rect, confirm: Confirm) {
     let lines = vec![Line::from("Quit writebook tui?"), Line::from(""), choices(confirm)];
     window(frame, area, " Quit ", lines, 44);
 }
 
 /// Buttons side by side and centered, the focused one filled in.
-fn buttons(labels: &[(&'static str, bool)]) -> Line<'static> {
+pub fn buttons(labels: &[(&'static str, bool)]) -> Line<'static> {
     let mut spans = Vec::new();
 
     for (index, (label, focused)) in labels.iter().enumerate() {
@@ -479,7 +489,7 @@ fn choice_line(label: &str, chosen: bool) -> Line<'static> {
     }
 }
 
-fn qr_lines(url: &str) -> Vec<Line<'static>> {
+pub fn qr_lines(url: &str) -> Vec<Line<'static>> {
     use qrcode::render::unicode::Dense1x2;
 
     match qrcode::QrCode::new(url) {

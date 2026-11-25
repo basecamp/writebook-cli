@@ -5,7 +5,9 @@ mod data;
 mod edit;
 mod editor;
 mod files;
+mod profile;
 mod search;
+mod settings;
 mod help;
 mod images;
 mod markdown;
@@ -30,7 +32,9 @@ use data::{Book, BookCard, BookForm, Instance, Leaf, NewLeaf, Publication};
 use edit::EditPage;
 use files::{FilePicker, Picked};
 use reader::LeafPage;
+use profile::ProfilePage;
 use search::Search;
+use settings::SettingsPage;
 use help::Binding;
 use images::Images;
 use starfield::Starfield;
@@ -72,6 +76,11 @@ pub enum Message {
     LeafLoaded(u64, u64, Result<data::LeafContent>),
     LeafSaved(Result<String>),
     Uploaded(Result<String>),
+    People(String, Result<data::People>),
+    PeopleChanged(Result<()>),
+    InviteReset(Result<String>),
+    ProfileLoaded(String, Result<data::Profile>),
+    ProfileSaved(Result<()>),
 }
 
 pub enum Loading<T> {
@@ -119,6 +128,10 @@ enum Screen {
     Edit(Box<EditPage>, Box<Screen>),
     /// One page of a book, over the book to go back to.
     Leaf(Box<LeafPage>, Box<BookPage>),
+    /// The instance's people and invite link, over the books to go back to.
+    Settings(Box<SettingsPage>, Books),
+    /// Your own profile, over the settings to go back to.
+    Profile(Box<ProfilePage>, Box<Screen>),
 }
 
 pub struct Books {
@@ -159,6 +172,8 @@ enum Overlay {
     Index { selected: usize },
     /// Asking whether to throw away the changes in the page editor.
     Discard(Confirm),
+    RemovePerson(Confirm),
+    ResetInvite(Confirm),
     /// Asking whether to quit, over whatever overlay was open.
     Quit { previous: Option<Box<Overlay>>, confirm: Confirm },
 }
@@ -443,6 +458,50 @@ impl App {
                 }
             }
             Message::LeafSaved(result) => self.leaf_saved(result),
+            Message::People(host, people) => {
+                if let Screen::Settings(page, _) = &mut self.screen
+                    && page.host == host
+                {
+                    page.people = Loading::from(people);
+                }
+            }
+            Message::PeopleChanged(result) => {
+                if let Err(error) = result {
+                    self.notice = Some(format!("{error:#}"));
+                }
+                self.load_people();
+            }
+            Message::ProfileLoaded(host, profile) => {
+                if let Screen::Profile(page, _) = &mut self.screen
+                    && page.host == host
+                {
+                    page.loaded(profile);
+                }
+            }
+            Message::ProfileSaved(result) => {
+                if let Screen::Profile(page, _) = &mut self.screen {
+                    page.saving = false;
+
+                    match result {
+                        Ok(()) => {
+                            page.saved();
+                            self.notice = Some("Saved.".to_string());
+                        }
+                        Err(error) => self.notice = Some(format!("{error:#}")),
+                    }
+                }
+            }
+            Message::InviteReset(result) => match result {
+                Ok(url) => {
+                    if let Screen::Settings(page, _) = &mut self.screen
+                        && let Loading::Ready(people) = &mut page.people
+                    {
+                        people.join_url = Some(url);
+                    }
+                    self.notice = Some("The old invite link no longer works.".to_string());
+                }
+                Err(error) => self.notice = Some(format!("{error:#}")),
+            },
             Message::Uploaded(result) => match result {
                 Ok(markdown) => {
                     if let Screen::Leaf(page, _) = &mut self.screen
@@ -546,11 +605,34 @@ impl App {
             },
             Screen::Edit(..) => {}
             Screen::Leaf(..) => self.leaf_key(key),
+            Screen::Profile(page, _) => match page.key(key) {
+                profile::Action::Nothing => {}
+                profile::Action::Back => self.close_profile(),
+                profile::Action::Save => self.save_profile(),
+            },
+            Screen::Settings(page, _) => match page.key(key) {
+                settings::Action::Nothing => {}
+                settings::Action::Back => self.close_settings(),
+                settings::Action::Copy(url) => {
+                    copy(&url);
+                    self.notice = Some(format!("Copied {url}"));
+                }
+                settings::Action::ResetInvite => self.overlay = Some(Overlay::ResetInvite(Confirm::no())),
+                settings::Action::Remove => self.overlay = Some(Overlay::RemovePerson(Confirm::no())),
+                settings::Action::Profile => self.open_profile(),
+                settings::Action::SetRole(id, administrator) => {
+                    let (host, sender) = (page.host.clone(), self.sender.clone());
+                    std::thread::spawn(move || {
+                        let _ = sender.send(Message::PeopleChanged(data::set_role(&host, id, administrator)));
+                    });
+                }
+            },
             Screen::Books(screen) => match key.code {
                 KeyCode::Enter => self.open_book(),
                 KeyCode::Esc => self.screen = Screen::Instances { selected: self.current_instance() },
                 KeyCode::Char('v') => self.books_view = self.books_view.toggled(),
                 KeyCode::Char('n') => self.open_editor(None),
+                KeyCode::Char('s') => self.open_settings(),
                 KeyCode::Char('/') => self.overlay = Some(Overlay::Search(Box::new(Search::new(None, "all books".to_string())))),
                 _ => {
                     let count = screen.books.ready().map(Vec::len).unwrap_or(0);
@@ -677,6 +759,34 @@ impl App {
 
                 Some(Overlay::Index { selected })
             }
+            Overlay::RemovePerson(mut confirm) => match confirm.answer(key) {
+                Some(true) => {
+                    if let Screen::Settings(page, _) = &self.screen
+                        && let Some(person) = page.selected()
+                    {
+                        let (host, id, sender) = (page.host.clone(), person.id, self.sender.clone());
+                        std::thread::spawn(move || {
+                            let _ = sender.send(Message::PeopleChanged(data::remove_person(&host, id)));
+                        });
+                    }
+                    None
+                }
+                Some(false) => None,
+                None => Some(Overlay::RemovePerson(confirm)),
+            },
+            Overlay::ResetInvite(mut confirm) => match confirm.answer(key) {
+                Some(true) => {
+                    if let Screen::Settings(page, _) = &self.screen {
+                        let (host, sender) = (page.host.clone(), self.sender.clone());
+                        std::thread::spawn(move || {
+                            let _ = sender.send(Message::InviteReset(data::reset_invite(&host)));
+                        });
+                    }
+                    None
+                }
+                Some(false) => None,
+                None => Some(Overlay::ResetInvite(confirm)),
+            },
             Overlay::Discard(mut confirm) => match confirm.answer(key) {
                 Some(true) => {
                     if let Screen::Leaf(page, _) = &mut self.screen {
@@ -1074,6 +1184,84 @@ impl App {
         });
     }
 
+    fn open_settings(&mut self) {
+        let screen = std::mem::replace(&mut self.screen, Screen::Instances { selected: 0 });
+        let Screen::Books(books) = screen else {
+            self.screen = screen;
+            return;
+        };
+
+        self.screen = Screen::Settings(Box::new(SettingsPage::new(books.host.clone())), books);
+        self.load_people();
+    }
+
+    fn close_settings(&mut self) {
+        let screen = std::mem::replace(&mut self.screen, Screen::Instances { selected: 0 });
+
+        self.screen = match screen {
+            Screen::Settings(_, books) => Screen::Books(books),
+            other => other,
+        };
+    }
+
+    fn open_profile(&mut self) {
+        let Screen::Settings(settings, _) = &self.screen else { return };
+        let host = settings.host.clone();
+        let back = std::mem::replace(&mut self.screen, Screen::Instances { selected: 0 });
+        self.screen = Screen::Profile(Box::new(ProfilePage::new(host.clone())), Box::new(back));
+
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let profile = data::profile(&host);
+            let _ = sender.send(Message::ProfileLoaded(host, profile));
+        });
+    }
+
+    /// Back to the settings, with the people reloaded for a changed name.
+    fn close_profile(&mut self) {
+        let screen = std::mem::replace(&mut self.screen, Screen::Instances { selected: 0 });
+
+        self.screen = match screen {
+            Screen::Profile(_, back) => *back,
+            other => other,
+        };
+        self.load_people();
+    }
+
+    fn save_profile(&mut self) {
+        let Screen::Profile(page, _) = &mut self.screen else { return };
+        let Some(id) = page.profile.ready().map(|it| it.id) else { return };
+
+        if page.name().is_empty() || page.email().is_empty() {
+            self.notice = Some("Your name and email can't be empty.".to_string());
+            return;
+        }
+
+        if page.needs_current_password() && page.current_password().is_empty() {
+            self.notice = Some("Fill in your current password to change your email or password.".to_string());
+            return;
+        }
+
+        page.saving = true;
+        let (host, name, email, password, current) =
+            (page.host.clone(), page.name().to_string(), page.email().to_string(), page.password().to_string(), page.current_password().to_string());
+        let sender = self.sender.clone();
+
+        std::thread::spawn(move || {
+            let _ = sender.send(Message::ProfileSaved(data::save_profile(&host, id, &name, &email, &password, &current)));
+        });
+    }
+
+    fn load_people(&self) {
+        let Screen::Settings(page, _) = &self.screen else { return };
+        let (host, sender) = (page.host.clone(), self.sender.clone());
+
+        std::thread::spawn(move || {
+            let people = data::people(&host);
+            let _ = sender.send(Message::People(host, people));
+        });
+    }
+
     fn reload_books(&self) {
         if let Screen::Books(screen) = &self.screen {
             let (host, sender) = (screen.host.clone(), self.sender.clone());
@@ -1266,6 +1454,7 @@ impl App {
             (Some(Overlay::Files(..) | Overlay::Search(_)), _) => true,
             (None, Screen::Edit(page, _)) => page.typing(),
             (None, Screen::Leaf(page, _)) => page.editor.is_some(),
+            (None, Screen::Profile(page, _)) => page.typing(),
             _ => false,
         }
     }
@@ -1292,6 +1481,8 @@ impl App {
             Screen::Book(screen) => &screen.host,
             Screen::Edit(page, _) => &page.host,
             Screen::Leaf(page, _) => &page.host,
+            Screen::Settings(page, _) => &page.host,
+            Screen::Profile(page, _) => &page.host,
         };
 
         self.instances.ready().and_then(|it| it.iter().position(|instance| &instance.url == host)).unwrap_or(0)
@@ -1327,6 +1518,23 @@ impl App {
                 views::breadcrumbs(frame, heading, &steps);
                 page.draw(frame, area, &mut self.images);
             }
+            Screen::Profile(page, back) => {
+                let area = views::masthead(frame, main);
+                let [heading, area] = Layout::vertical([Constraint::Length(4), Constraint::Fill(1)]).areas(area);
+                let instance = match back.as_ref() {
+                    Screen::Settings(_, books) => books.name.clone(),
+                    _ => String::new(),
+                };
+                let name = page.profile.ready().map(|it| it.name.clone()).unwrap_or_default();
+                views::breadcrumbs(frame, heading, &[instance.as_str(), "Settings", name.as_str()]);
+                page.draw(frame, area);
+            }
+            Screen::Settings(page, books) => {
+                let area = views::masthead(frame, main);
+                let [heading, area] = Layout::vertical([Constraint::Length(4), Constraint::Fill(1)]).areas(area);
+                views::breadcrumbs(frame, heading, &[books.name.as_str(), "Settings"]);
+                page.draw(frame, area);
+            }
             Screen::Leaf(page, book) => {
                 let area = views::masthead(frame, main);
                 let [heading, area] = Layout::vertical([Constraint::Length(4), Constraint::Fill(1)]).areas(area);
@@ -1361,6 +1569,14 @@ impl App {
                 }
             }
             Some(Overlay::Discard(confirm)) => views::discard(frame, main, *confirm),
+            Some(Overlay::RemovePerson(confirm)) => {
+                if let Screen::Settings(page, _) = &self.screen
+                    && let Some(person) = page.selected()
+                {
+                    views::remove_person(frame, main, &person.name, *confirm);
+                }
+            }
+            Some(Overlay::ResetInvite(confirm)) => views::reset_invite(frame, main, *confirm),
             Some(Overlay::Publishing(publishing)) => views::publishing(frame, main, publishing),
             Some(Overlay::Files(picker, _)) => picker.draw(frame, main, &mut self.images),
             Some(Overlay::Search(search)) => search.draw(frame, main),
@@ -1404,7 +1620,7 @@ impl App {
             (Some(Overlay::Quit { .. }), _) => vec![("←→", "choose"), ("enter", "answer"), ("esc", "stay"), ("ctrl+c", "quit")],
             (None, Screen::Instances { .. }) => vec![("↑↓", "select"), ("enter", "open"), ("ctrl+c", "quit")],
             (None, Screen::Books(_)) => {
-                let mut bindings = vec![(arrows(self.books_view), "select"), ("enter", "open"), ("v", self.view_name(self.books_view)), ("/", "search"), ("n", "new book")];
+                let mut bindings = vec![(arrows(self.books_view), "select"), ("enter", "open"), ("v", self.view_name(self.books_view)), ("/", "search"), ("n", "new book"), ("s", "settings")];
                 bindings.extend([("esc", "instances"), ("ctrl+i", "instances"), ("ctrl+c", "quit")]);
                 bindings
             }
@@ -1424,6 +1640,9 @@ impl App {
                 bindings
             }
             (Some(Overlay::Index { .. }), _) => vec![("↑↓", "select"), ("enter", "go to page"), ("esc", "close")],
+            (Some(Overlay::RemovePerson(_) | Overlay::ResetInvite(_)), _) => vec![("←→", "choose"), ("enter", "answer"), ("esc", "cancel")],
+            (None, Screen::Settings(page, _)) => page.bindings(),
+            (None, Screen::Profile(page, _)) => page.bindings(),
             (Some(Overlay::Discard(_)), _) => vec![("←→", "choose"), ("enter", "answer"), ("esc", "keep editing")],
             (None, Screen::Book(screen)) if screen.moving.is_some() => vec![(arrows(self.book_view), "move"), ("enter", "save"), ("esc", "cancel")],
             (None, Screen::Book(screen)) => {
