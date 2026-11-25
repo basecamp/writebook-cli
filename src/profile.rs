@@ -9,12 +9,12 @@ use crate::inventory::Inventory;
 
 /// Sign in to an instance as a profile and keep it. Adding one that's
 /// already there signs in as it again.
-pub fn add(name: &str, instance: Option<&str>, code: Option<&str>) -> Result<()> {
+pub fn add(name: &str, instance: Option<&str>, code: Option<&str>, access: creds::Access) -> Result<()> {
     let inventory = Inventory::load()?;
     let (alias, found) = inventory.find(instance)?;
     let (alias, url) = (alias.clone(), found.url.clone());
 
-    if creds::sign_in(&url, name, code)? {
+    if creds::sign_in(&url, name, code, access)? {
         Inventory::update(|inventory| {
             inventory.add_profile(&alias, name)?;
             Ok(())

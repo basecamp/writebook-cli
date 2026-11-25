@@ -86,7 +86,7 @@ fn adds_instances_and_picks_them_by_alias_url_or_default() {
     let removed = writebook(&["instance", "remove", &server.url], &env);
     assert!(removed.status.success(), "{}", stderr(&removed));
     let json = serde_json::from_str::<serde_json::Value>(&stdout(&writebook(&["instance", "list", "--json"], &env))).unwrap()["data"].clone();
-    assert_eq!(json, serde_json::json!([{ "alias": "other", "url": other.url, "default": true, "profile": "default", "signed_in": true }]));
+    assert_eq!(json, serde_json::json!([{ "alias": "other", "url": other.url, "default": true, "profile": "default", "signed_in": true, "read_only": false }]));
 
     let credentials = std::fs::read_to_string(config.join("writebook/credentials.json")).unwrap();
     assert!(!credentials.contains(&server.url), "removing an instance signs out of it: {credentials}");

@@ -10,7 +10,7 @@ use crate::inventory::{DEFAULT_PROFILE, Instance, Inventory, host_of};
 
 /// Sign in to an instance and keep it in the inventory. Adding one that's
 /// already there signs in to it again, or adds the profile when it's new.
-pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Option<&str>) -> Result<()> {
+pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Option<&str>, access: creds::Access) -> Result<()> {
     let inventory = Inventory::load()?;
 
     match inventory.lookup(target).map(|(alias, instance)| (alias.clone(), instance.clone())) {
@@ -21,7 +21,7 @@ pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Optio
 
             let profile = profile.unwrap_or(&instance.default_profile);
 
-            if creds::sign_in(&instance.url, profile, code)? {
+            if creds::sign_in(&instance.url, profile, code, access)? {
                 record_sign_in(&existing, &instance.url, profile)?;
                 println!("Signed in to {existing} ({}) as {profile}.", instance.url);
             }
@@ -37,7 +37,7 @@ pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Optio
 
             ensure_alias_free(&inventory, &alias)?;
 
-            if creds::sign_in(&host, profile, code)? {
+            if creds::sign_in(&host, profile, code, access)? {
                 record_sign_in(&alias, &host, profile)?;
                 println!("Added {alias} ({host}), signed in as {profile}.");
             }
@@ -90,6 +90,7 @@ struct Row {
     default: bool,
     profile: String,
     signed_in: bool,
+    read_only: bool,
 }
 
 impl Row {
@@ -102,7 +103,9 @@ impl Row {
     }
 
     fn status_cell(&self) -> String {
-        if self.signed_in {
+        if self.read_only {
+            format!("Signed in as {}, read-only", self.profile)
+        } else if self.signed_in {
             format!("Signed in as {}", self.profile)
         } else {
             "Signed out".to_string()
@@ -117,12 +120,15 @@ pub fn list(format: Format) -> Result<()> {
     let mut rows = Vec::new();
 
     for (alias, instance) in &inventory.instances {
+        let access = creds::stored_access(&instance.url, &instance.default_profile)?;
+
         rows.push(Row {
             alias: alias.clone(),
             url: instance.url.clone(),
             default: inventory.default.as_ref() == Some(alias),
             profile: instance.default_profile.clone(),
-            signed_in: creds::signed_in(&instance.url, &instance.default_profile)?,
+            signed_in: access.is_some(),
+            read_only: access == Some(creds::Access::ReadOnly),
         });
     }
 

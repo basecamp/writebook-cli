@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::api::{self, ApiError, Part, PartData};
 use crate::checkout::{self, Checkout, LeafState, State};
+use crate::creds;
 use crate::index::{self, Entry};
 use crate::merge;
 use crate::plan;
@@ -17,6 +18,7 @@ use crate::sync;
 pub fn run() -> Result<()> {
     let checkout = Checkout::find()?;
     let origin = checkout.origin()?;
+    creds::ensure_can_write(&origin.url)?;
     let mut state = checkout.state()?;
     let document = index::parse(&checkout.read_working("index.md")?)?;
 
