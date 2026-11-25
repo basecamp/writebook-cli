@@ -478,7 +478,17 @@ pub fn upload(host: &str, record_gid: &str, path: &std::path::Path) -> Result<St
     let url = response["fileUrl"].as_str().context("Writebook's answer had no address for the file")?;
     let image = image::ImageFormat::from_path(path).is_ok();
 
-    Ok(if image { format!("![{name}]({url})") } else { format!("[{name}]({url})") })
+    Ok(file_markdown(&name, url, image))
+}
+
+fn file_markdown(name: &str, url: &str, image: bool) -> String {
+    let label = name.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
+
+    if image {
+        format!("![{label}]({url})")
+    } else {
+        format!("[{label}]({url})")
+    }
 }
 
 /// The people with access to an instance, and the link that invites more.
@@ -607,6 +617,12 @@ mod tests {
         image::DynamicImage::new_luma8(IMAGE_SIDE + 1, 1).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
 
         assert!(decode(image::ImageReader::new(std::io::Cursor::new(png))).is_err());
+    }
+
+    #[test]
+    fn escapes_brackets_and_backslashes_in_an_uploaded_file_label() {
+        assert_eq!(file_markdown("notes].pdf", "/u/1", false), "[notes\\].pdf](/u/1)");
+        assert_eq!(file_markdown("a\\[b].png", "/u/2", true), "![a\\\\\\[b\\].png](/u/2)");
     }
 
     #[test]
