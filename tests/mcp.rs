@@ -101,9 +101,12 @@ fn serves_each_http_caller_with_their_own_token() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut banner = String::new();
-    BufReader::new(child.stderr.take().unwrap()).read_line(&mut banner).unwrap();
-    let endpoint = banner.split_whitespace().find(|it| it.ends_with("/mcp.")).unwrap().trim_end_matches('.').to_string();
+    let mut logs = BufReader::new(child.stderr.take().unwrap());
+    let mut serving = String::new();
+    logs.read_line(&mut serving).unwrap();
+    let serving: Value = serde_json::from_str(&serving).unwrap();
+    assert_eq!((&serving["event"], &serving["instance"], &serving["transport"]), (&json!("serving"), &json!(server.url), &json!("http")));
+    let endpoint = serving["address"].as_str().unwrap().to_string();
 
     let anonymous = post(&endpoint, None, &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }));
     assert_eq!(anonymous.0, 401);
@@ -131,6 +134,22 @@ fn serves_each_http_caller_with_their_own_token() {
 
     child.kill().unwrap();
     child.wait().unwrap();
+
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut logs, &mut rest).unwrap();
+    let events: Vec<Value> = rest.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let calls: Vec<(&str, &str, Option<&str>)> = events
+        .iter()
+        .filter(|it| it["event"] == "tool_call")
+        .map(|it| (it["tool"].as_str().unwrap(), it["outcome"].as_str().unwrap(), it["reason"].as_str()))
+        .collect();
+    assert_eq!(calls, [("list_books", "ok", None), ("list_books", "error", Some("token_rejected"))]);
+    assert!(events.iter().any(|it| it["event"] == "http_request" && it["status"] == 401 && it["method"] == "POST"), "{rest}");
+
+    // Nothing in them points at who made a request or what it was about.
+    for secret in ["wb_at_alice", "wb_at_revoked", "127.0.0.1", "Handbook"] {
+        assert!(!rest.contains(secret), "the logs mention {secret}: {rest}");
+    }
 }
 
 fn fake_writebook() -> Server {

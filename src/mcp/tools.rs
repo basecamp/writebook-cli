@@ -131,6 +131,10 @@ fn page_id() -> Value {
     json!({ "type": "integer", "description": "The page's, section's or picture's id, from book_contents" })
 }
 
+pub fn exists(name: &str) -> bool {
+    SPECS.iter().any(|spec| spec.name == name)
+}
+
 /// The tools served. From the inventory, each takes the instance to use, and
 /// list_instances lists them; a served instance is the only one there is.
 pub fn list(read_only: bool, inventory: bool) -> Vec<Tool> {

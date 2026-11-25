@@ -22,6 +22,8 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "net"] }
 toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std", "registry"] }
 ureq = { version = "3", features = ["json"] }
 url = "2"
 usage = { version = "6", package = "usage-rs", features = ["completions"] }

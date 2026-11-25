@@ -6,9 +6,11 @@
 //! server sends that token only to that instance and never uses a stored
 //! login, so a request without a token can't use anyone else's.
 
+mod log;
 mod tools;
 
 use anyhow::{Context, Result, bail};
+use std::time::Instant;
 use axum::extract::Request;
 use axum::http::{StatusCode, header, request::Parts};
 use axum::middleware::{self, Next};
@@ -27,6 +29,7 @@ use crate::{api, creds};
 
 pub fn run(instance: Option<&str>, read_only: bool, serve: Option<&str>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    log::start();
 
     match serve {
         None if instance.is_some() => bail!("--instance only goes with --serve: on stdio, every instance you added is served"),
@@ -56,7 +59,7 @@ async fn serve_stdio(read_only: bool) -> Result<()> {
     })
     .await??;
 
-    eprintln!("Serving your Writebook instances over MCP on stdio{}", if writebook.read_only { ", read-only" } else { "" });
+    log::serving("inventory", "stdio", None, writebook.read_only);
     writebook.serve(rmcp::transport::stdio()).await?.waiting().await?;
     Ok(())
 }
@@ -66,11 +69,7 @@ async fn serve_http(host: String, read_only: bool, address: &str) -> Result<()> 
     let served = host.clone();
     let writebook = Writebook { origin: Origin::Served { host }, read_only };
 
-    eprintln!(
-        "Serving {served} over MCP at http://{}/mcp{}. Every request must include a Writebook token",
-        listener.local_addr()?,
-        if read_only { ", read-only" } else { "" }
-    );
+    log::serving(&served, "http", Some(format!("http://{}/mcp", listener.local_addr()?)), read_only);
 
     // Allow any Host header. Host checks stop a web page from using a local
     // server's stored login, and this server doesn't store one.
@@ -80,7 +79,8 @@ async fn serve_http(host: String, read_only: bool, address: &str) -> Result<()> 
         .with_json_response(true);
     let service: StreamableHttpService<Writebook, NeverSessionManager> =
         StreamableHttpService::new(move || Ok(writebook.clone()), Default::default(), config);
-    let router = axum::Router::new().route_service("/mcp", service).layer(middleware::from_fn(require_token));
+    let router = axum::Router::new().route_service("/mcp", service).layer(middleware::from_fn(require_token))
+        .layer(middleware::from_fn(log_request));
 
     axum::serve(listener, router)
         .with_graceful_shutdown(async {
@@ -88,6 +88,15 @@ async fn serve_http(host: String, read_only: bool, address: &str) -> Result<()> 
         })
         .await?;
     Ok(())
+}
+
+async fn log_request(request: Request, next: Next) -> Response {
+    let started = Instant::now();
+    let method = request.method().clone();
+    let response = next.run(request).await;
+
+    log::http_request(&method, response.status().as_u16(), started.elapsed());
+    response
 }
 
 /// Answer 401 to a request without a token before it reaches MCP, which is
@@ -203,9 +212,14 @@ impl ServerHandler for Writebook {
         let name = request.name.to_string();
         let arguments = request.arguments.unwrap_or_default();
 
-        let outcome = tokio::task::spawn_blocking(move || tools::call(&name, &arguments, served, read_only))
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let started = Instant::now();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let outcome = tools::call(&name, &arguments, served, read_only);
+            log::tool_call(&name, &outcome, started.elapsed());
+            outcome
+        })
+        .await
+        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
 
         Ok(match (outcome, &self.origin) {
             (Ok(value), _) => CallToolResult::success(vec![ContentBlock::text(serde_json::to_string_pretty(&value).unwrap_or_default())]),
