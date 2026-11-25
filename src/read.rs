@@ -14,6 +14,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::api::TokenRejected;
 use crate::checkout;
 use crate::creds;
 use crate::inventory;
@@ -23,7 +24,7 @@ use crate::sync;
 use crate::web::{self, Target, Web};
 
 #[derive(Serialize)]
-struct Document {
+pub struct Document {
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     author: Option<String>,
@@ -34,7 +35,7 @@ struct Document {
 }
 
 #[derive(Serialize)]
-struct Book {
+pub struct Book {
     id: u64,
     title: String,
     author: String,
@@ -42,7 +43,7 @@ struct Book {
 }
 
 #[derive(Serialize)]
-struct Contents {
+pub struct Contents {
     title: String,
     url: String,
     leaves: Vec<Leaf>,
@@ -50,7 +51,7 @@ struct Contents {
 
 /// One entry in a book: a page, a section or a picture.
 #[derive(Serialize)]
-struct Leaf {
+pub struct Leaf {
     id: u64,
     #[serde(rename = "type")]
     kind: String,
@@ -59,7 +60,7 @@ struct Leaf {
 }
 
 #[derive(Serialize)]
-struct Hit {
+pub struct Hit {
     book: String,
     title: String,
     url: String,
@@ -184,24 +185,7 @@ pub fn contents(book: &str, instance: Option<&str>, format: Format) -> Result<()
         );
     }
 
-    let Some(manifest) = get_json(&web, &format!("/books/{book_id}/manifest.json"))? else {
-        bail!("{host} has no book {book_id}, or it doesn't have the CLI API");
-    };
-    let manifest = Manifest::parse(&manifest)?;
-    let book_url = web.url(&format!("/{book_id}/{}", manifest.book.slug));
-
-    let leaves = manifest
-        .leaves
-        .iter()
-        .map(|leaf| Leaf {
-            id: leaf.id,
-            kind: leaf.kind.to_lowercase(),
-            title: leaf.title.clone(),
-            url: format!("{book_url}/{}/{}", leaf.id, checkout::slugify(&leaf.title)),
-        })
-        .collect();
-
-    let contents = Contents { title: manifest.book.title.clone(), url: book_url, leaves };
+    let contents = book_contents(&web, book_id)?;
 
     match format {
         Format::Json { jq } => {
@@ -226,6 +210,28 @@ pub fn contents(book: &str, instance: Option<&str>, format: Format) -> Result<()
     }
 
     Ok(())
+}
+
+/// Every page, section and picture in a book, in order. Needs a token.
+pub fn book_contents(web: &Web, book_id: u64) -> Result<Contents> {
+    let Some(manifest) = get_json(web, &format!("/books/{book_id}/manifest.json"))? else {
+        bail!("{} has no book {book_id}, or it doesn't have the CLI API", web.host);
+    };
+    let manifest = Manifest::parse(&manifest)?;
+    let book_url = web.url(&format!("/{book_id}/{}", manifest.book.slug));
+
+    let leaves = manifest
+        .leaves
+        .iter()
+        .map(|leaf| Leaf {
+            id: leaf.id,
+            kind: leaf.kind.to_lowercase(),
+            title: leaf.title.clone(),
+            url: format!("{book_url}/{}/{}", leaf.id, checkout::slugify(&leaf.title)),
+        })
+        .collect();
+
+    Ok(Contents { title: manifest.book.title.clone(), url: book_url, leaves })
 }
 
 fn book_on_instance(book: &str, instance: Option<&str>) -> Result<(String, u64)> {
@@ -286,11 +292,7 @@ pub fn search(query: &str, book: Option<&str>, instance: Option<&str>, format: F
         None => (inventory::host(instance)?, None),
     };
     let web = connect(&host)?;
-
-    let hits = match search_api(&web, book_id, query)? {
-        Some(hits) => hits,
-        None => search_pages(&web, book_id, query)?,
-    };
+    let hits = find(&web, book_id, query)?;
 
     match format {
         Format::Json { jq } => {
@@ -309,6 +311,14 @@ pub fn search(query: &str, book: Option<&str>, instance: Option<&str>, format: F
     }
 
     Ok(())
+}
+
+/// Search one book, or every book the reader can see.
+pub fn find(web: &Web, book_id: Option<u64>, query: &str) -> Result<Vec<Hit>> {
+    match search_api(web, book_id, query)? {
+        Some(hits) => Ok(hits),
+        None => search_pages(web, book_id, query),
+    }
 }
 
 fn print_hits_table(hits: &[Hit]) {
@@ -378,6 +388,16 @@ fn one_line(text: &str) -> String {
 
 fn connect(host: &str) -> Result<Web> {
     Ok(Web::new(host, creds::existing_access_token(host)?))
+}
+
+/// A whole book as Markdown, through the CLI API.
+pub fn whole_book(web: &Web, book_id: u64) -> Result<Document> {
+    let target = Target { host: web.host.clone(), book_id: Some(book_id), leaf_id: None, kind: None, path: format!("/{book_id}") };
+
+    match from_api(web, &target)? {
+        Some(document) => Ok(document),
+        None => bail!("{} has no book {book_id}, or it doesn't have the CLI API", web.host),
+    }
 }
 
 /// Read through the CLI API. None when there's no token or the site doesn't
@@ -453,7 +473,7 @@ fn get_json(web: &Web, path: &str) -> Result<Option<Value>> {
     let page = web.get(path, "application/json")?;
 
     if page.status == 401 {
-        bail!("{} did not accept the token — sign in again, or check WRITEBOOK_TOKEN", web.host);
+        return Err(TokenRejected { host: web.host.clone() }.into());
     }
 
     if matches!(page.status, 404 | 406) {
@@ -475,7 +495,7 @@ fn api_json(web: &Web, path: &str, query: &[(&str, &str)]) -> Result<Option<Valu
     let page = web.get_query(path, "application/json", query)?;
 
     if page.status == 401 {
-        bail!("{} did not accept the token — sign in again, or check WRITEBOOK_TOKEN", web.host);
+        return Err(TokenRejected { host: web.host.clone() }.into());
     }
 
     if matches!(page.status, 404 | 406) || (300..400).contains(&page.status) {
@@ -548,7 +568,7 @@ fn not_readable(web: &Web, what: &str, url: &str) -> String {
     }
 }
 
-fn list_books(web: &Web) -> Result<Vec<Book>> {
+pub fn list_books(web: &Web) -> Result<Vec<Book>> {
     if let Some(value) = api_json(web, "/books.json", &[])? {
         let Ok(books) = serde_json::from_value::<Vec<ApiBook>>(value) else {
             bail!("{} answered /books.json with JSON this version of the CLI doesn't understand", web.host);

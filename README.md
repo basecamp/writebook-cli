@@ -76,6 +76,26 @@ writebook instance add https://handbook.example.org --alias handbook
 writebook book list --instance handbook
 ```
 
+There's also an MCP server which allows agents to read and edit books directly
+on all configured instances. To give Claude access to it run:
+
+```sh
+claude mcp add writebook -- writebook mcp
+```
+
+It can also be used as a server to give anyone's agent access to a Writebook
+instance using their own logins:
+
+```sh
+writebook mcp --instance https://books.example.com --serve 127.0.0.1:8080
+```
+
+Or run it with Docker:
+
+```sh
+docker run -p 8080:8080 ghcr.io/basecamp/writebook-cli mcp --instance https://books.example.com --serve 0.0.0.0:8080
+```
+
 Run `writebook --help` for every command.
 
 ## Development
