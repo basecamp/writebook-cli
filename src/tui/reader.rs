@@ -6,8 +6,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use super::confirm::{Confirm, Question};
 use super::data::{self, Book, Leaf, LeafContent};
@@ -291,7 +291,7 @@ impl LeafPage {
                 if self.leaves[self.index].is_picture() {
                     draw_picture(frame, area, &self.host, content, images);
                 } else if self.leaves[self.index].is_section() {
-                    draw_section(frame, column, content);
+                    self.scroll = draw_section(frame, column, content, self.scroll);
                 } else {
                     if self.rendered.as_ref().is_none_or(|it| it.width != column.width) {
                         self.rendered = Some(Rendered { width: column.width, rows: markdown::render(&content.body, column.width) });
@@ -380,12 +380,27 @@ fn draw_picture(frame: &mut Frame, area: Rect, host: &str, content: &LeafContent
     frame.render_widget(Paragraph::new(Line::from(content.body.clone()).italic()).alignment(Alignment::Center), caption);
 }
 
-fn draw_section(frame: &mut Frame, area: Rect, content: &LeafContent) {
-    let lines: Vec<Line> = content.body.lines().map(|line| Line::from(line.to_string())).collect();
+/// A section's text in the middle of the screen, or scrolled like a page
+/// when it's taller than the screen. Returns the scroll, kept from going past
+/// the end.
+fn draw_section(frame: &mut Frame, area: Rect, content: &LeafContent, scroll: usize) -> usize {
+    let lines: Vec<Line> = content
+        .body
+        .lines()
+        .flat_map(|line| markdown::wrap(vec![Span::raw(line.trim().to_string())], usize::from(area.width), "", ""))
+        .map(|line| Line::from(line.to_string().trim_end().to_string()))
+        .collect();
+    let height = lines.len() + 2;
 
-    let height = (lines.len() as u16 + 2).min(area.height);
-    let middle = Rect { y: area.y + (area.height - height) / 2, height, ..area };
-    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true }), middle);
+    if height <= usize::from(area.height) {
+        let middle = Rect { y: area.y + (area.height - height as u16) / 2, height: height as u16, ..area };
+        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), middle);
+        0
+    } else {
+        let scroll = scroll.min(height - usize::from(area.height));
+        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center).scroll((scroll as u16, 0)), area);
+        scroll
+    }
 }
 
 impl Index {
@@ -519,6 +534,16 @@ mod tests {
         terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images)).unwrap();
 
         assert!(views::screen_text(&terminal).iter().any(|it| it.trim() == "Loading the picture…"));
+    }
+
+    #[test]
+    fn a_section_taller_than_the_screen_wraps_and_scrolls() {
+        let mut page = page(&"Part one of the handbook covers everything about being on call. ".repeat(8));
+        page.leaves[0].kind = "Section".to_string();
+        assert!(drawn(&mut page).iter().any(|it| it.trim() == "Part one of the handbook covers"));
+
+        page.scroll = usize::MAX;
+        assert!(drawn(&mut page).iter().any(|it| it.trim() == "covers everything about being on call."));
     }
 
     #[test]
