@@ -5,7 +5,7 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
-const CARGO: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LOG/cargo.args\"\nexit \"$(cat \"$LOG/cargo.status\")\"\n";
+const CARGO: &str = include_str!("test_run/cargo.sh");
 
 struct Run {
     output: Output,

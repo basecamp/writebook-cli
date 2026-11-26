@@ -48,8 +48,8 @@ pub fn bytes(status: u16, body: &[u8]) -> Reply {
     }
 }
 
-/// A reply whose Content-Length promises more than the body it sends before
-/// closing the connection.
+/// A reply whose Content-Length is larger than the body sent before the
+/// connection closes.
 pub fn cut_short(status: u16, body: &str) -> Reply {
     Reply {
         length: body.len() + 100,
