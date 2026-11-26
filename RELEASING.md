@@ -24,7 +24,7 @@ Before it pushes anything, the script:
 - needs you on `main`, with no changes, and in sync with `origin`
 - refuses a tag that already exists at another commit
 - refuses a version older than the latest release
-- runs clippy and the tests (the live tests only when `WRITEBOOK_LIVE_URL` is set)
+- runs `bin/dev code lint` and `bin/dev test run` (the live tests only when `WRITEBOOK_LIVE_URL` is set)
 
 If the tag push is rejected, it deletes the local tag.
 

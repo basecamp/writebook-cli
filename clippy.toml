@@ -1,0 +1,9 @@
+allow-unwrap-in-tests = true
+
+disallowed-methods = [
+    { path = "core::option::Option::map_or", reason = "a branch: write the if or the match (code-style skill, Conditionals)" },
+    { path = "core::option::Option::map_or_else", reason = "a branch: write the if or the match (code-style skill, Conditionals)" },
+    { path = "core::result::Result::map_or", reason = "a branch: write the if or the match (code-style skill, Conditionals)" },
+    { path = "core::result::Result::map_or_else", reason = "a branch: write the if or the match (code-style skill, Conditionals)" },
+    { path = "core::result::Result::unwrap_or_default", reason = "an error dropped without a name: handle it, or `expect` the invariant it breaks" },
+]

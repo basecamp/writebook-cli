@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Runs bin/dev's commands, from crates/writebook-dev, after bin/setup has made sure the tools
+# are there.
+set -eo pipefail
+
+cd "$(dirname "$0")/.."
+
+bin/setup --quiet
+eval "$(mise hook-env -s bash)"
+
+cargo build --quiet -p writebook-dev
+[ $# -eq 0 ] && set -- --help
+exec "${CARGO_TARGET_DIR:-target}/debug/writebook-dev" "$@"
