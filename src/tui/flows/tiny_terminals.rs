@@ -1,6 +1,3 @@
-//! Every screen and overlay drawn in terminals too small for them, which
-//! must not panic.
-
 use crossterm::event::KeyCode;
 use serde_json::json;
 

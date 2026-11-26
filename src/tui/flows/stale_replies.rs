@@ -4,36 +4,10 @@
 
 use crossterm::event::KeyCode;
 use serde_json::json;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{Tui, json, not_found};
+use super::{Gate, Tui, json, not_found};
 use crate::scratch::TempDir;
-
-#[derive(Clone, Default)]
-struct Gate {
-    held: Arc<AtomicBool>,
-    open: Arc<AtomicBool>,
-}
-
-impl Gate {
-    fn hold(&self) {
-        self.held.store(true, Ordering::SeqCst);
-        while !self.open.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
-    }
-
-    fn wait_until_held(&self) {
-        while !self.held.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
-    }
-
-    fn release(&self) {
-        self.open.store(true, Ordering::SeqCst);
-    }
-}
 
 fn desk(held: &'static str, gate: &Gate) -> Tui {
     let gate = gate.clone();
