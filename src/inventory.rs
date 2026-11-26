@@ -54,7 +54,7 @@ impl Inventory {
 
         let mut inventory = Inventory::load()?;
         let result = change(&mut inventory)?;
-        fsutil::write_atomically(&path()?, toml::to_string(&inventory)?.as_bytes())?;
+        fsutil::write_privately(&path()?, toml::to_string(&inventory)?.as_bytes())?;
         Ok(result)
     }
 

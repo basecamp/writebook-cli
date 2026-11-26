@@ -24,12 +24,15 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
 
 /// Like `write_atomically`, with the file readable only by its owner from the
 /// moment it exists.
-pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let payload = serde_json::to_string_pretty(value)?;
+pub fn write_privately(path: &Path, contents: &[u8]) -> Result<()> {
     let temporary = temporary_sibling(path)?;
-    create_private(&temporary)?.write_all(payload.as_bytes())?;
+    create_private(&temporary)?.write_all(contents)?;
     fs::rename(&temporary, path).with_context(|| format!("could not write {}", path.display()))?;
     Ok(())
+}
+
+pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_privately(path, serde_json::to_string_pretty(value)?.as_bytes())
 }
 
 /// The file at `path` opened for writing, created readable only by its owner
