@@ -170,8 +170,8 @@ pub fn access_token(host: &str) -> Result<Token> {
 
 /// Force-refresh after a 401: the cached token was rejected even though it
 /// looked fresh, so rotate the refresh token or fall back to signing in again.
-/// A renewal never widens access: a read-only sign-in renewed with more is
-/// revoked, not kept.
+/// A renewal keeps the sign-in's access: one that comes back with more is
+/// revoked.
 pub fn renewed_access_token(host: &str) -> Result<Token> {
     if given_token(host)?.is_some() {
         bail!("{host} did not accept the token from WRITEBOOK_TOKEN");

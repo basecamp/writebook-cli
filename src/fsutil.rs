@@ -23,7 +23,7 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
 }
 
 /// Like `write_atomically`, with the file readable only by its owner from the
-/// moment it exists, so its contents are never readable by others.
+/// moment it exists.
 pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let payload = serde_json::to_string_pretty(value)?;
     let temporary = temporary_sibling(path)?;

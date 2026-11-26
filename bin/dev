@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Runs bin/dev's commands, from crates/writebook-dev, after bin/setup has made sure the tools
-# are there.
 set -eo pipefail
 
 cd "$(dirname "$0")/.."
