@@ -32,6 +32,28 @@ pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> 
     Ok(())
 }
 
+/// The file at `path` opened for writing, created readable only by its owner
+/// if it isn't there yet. On Windows it gets an access list of its own, so a
+/// change to its folder's list doesn't pass through it.
+pub fn open_private(path: &Path) -> Result<fs::File> {
+    match fs::OpenOptions::new().write(true).open(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match create_private(path) {
+            Err(error) if is_already_there(&error) => fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .with_context(|| format!("could not open {}", path.display())),
+            created => created.with_context(|| format!("could not create {}", path.display())),
+        },
+        opened => opened.with_context(|| format!("could not open {}", path.display())),
+    }
+}
+
+fn is_already_there(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|it| it.kind() == std::io::ErrorKind::AlreadyExists)
+}
+
 #[cfg(unix)]
 fn create_private(path: &Path) -> Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
