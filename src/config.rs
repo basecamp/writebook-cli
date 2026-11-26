@@ -1,7 +1,7 @@
 //! The config directory, where sign-ins and the instance list are kept.
 
 use anyhow::{Context, Result};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::path::PathBuf;
 
 use crate::fsutil;
@@ -20,15 +20,8 @@ pub fn dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// A lock file in the config directory, created if it isn't there yet.
-/// Holding a lock on it keeps other commands out until it's dropped.
+/// A lock file in the config directory, created readable only by you if it
+/// isn't there yet. Holding a lock on it keeps other commands out until it's dropped.
 pub fn lock_file(name: &str) -> Result<File> {
-    let path = dir()?.join(name);
-
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("could not open {}", path.display()))
+    fsutil::open_private(&dir()?.join(name))
 }

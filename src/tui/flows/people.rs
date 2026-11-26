@@ -428,11 +428,15 @@ fn rows_line_up_with_wide_names_and_the_selection_stays_on_someone_when_the_list
     tui.wait_for("Handbook");
     tui.press(KeyCode::Char('s'));
     let screen = tui.wait_for("Kevin");
-    assert_eq!(
-        row(&screen, "山").chars().count(),
-        row(&screen, "Kevin").chars().count(),
-        "{screen}"
-    );
+    for name in ["山", "Kevin"] {
+        let line = screen
+            .lines()
+            .find(|it| it.contains(name))
+            .expect("a row for each name");
+        let (cells_before_the_role, role) = line.split_once('‹').expect("a role on each row");
+        assert_eq!(role, " member ›", "{screen}");
+        assert_eq!(cells_before_the_role.chars().count(), 72, "{screen}");
+    }
 
     for _ in 0..39 {
         tui.press(KeyCode::Down);

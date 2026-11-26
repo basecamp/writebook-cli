@@ -48,7 +48,6 @@ workspace = true
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# The code reads better with these, so `bin/dev code lint` leaves them alone.
 [workspace.lints.clippy]
 allow_attributes_without_reason = "deny"
 collapsible_if = "allow"

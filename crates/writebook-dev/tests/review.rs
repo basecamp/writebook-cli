@@ -2,6 +2,7 @@
 //! `gh`, `codex` and `claude` on the PATH.
 
 #![cfg(test)]
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

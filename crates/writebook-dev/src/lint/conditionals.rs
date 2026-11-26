@@ -18,8 +18,8 @@ pub(super) fn no_combinator_chain_stands_in_for_a_branch() -> Option<Refusal> {
             chains.visit_file(&source.file);
             chains.found.lines
         }),
-        "chains end a `map`, `then` or `then_some` with `unwrap_or` or `unwrap_or_else`, a ternary \
-         in disguise: write the `if` or the `match`",
+        "chains end a `map`, `then` or `then_some` with `unwrap_or` or `unwrap_or_else`, which \
+         picks between two values: write the `if` or the `match`",
     )
 }
 

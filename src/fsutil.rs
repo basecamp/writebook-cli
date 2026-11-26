@@ -23,13 +23,38 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
 }
 
 /// Like `write_atomically`, with the file readable only by its owner from the
-/// moment it exists, so its contents are never readable by others.
-pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let payload = serde_json::to_string_pretty(value)?;
+/// moment it exists.
+pub fn write_privately(path: &Path, contents: &[u8]) -> Result<()> {
     let temporary = temporary_sibling(path)?;
-    create_private(&temporary)?.write_all(payload.as_bytes())?;
+    create_private(&temporary)?.write_all(contents)?;
     fs::rename(&temporary, path).with_context(|| format!("could not write {}", path.display()))?;
     Ok(())
+}
+
+pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_privately(path, serde_json::to_string_pretty(value)?.as_bytes())
+}
+
+/// The file at `path` opened for writing, created readable only by its owner
+/// if it isn't there yet. On Windows it gets an access list of its own, so a
+/// change to its folder's list doesn't pass through it.
+pub fn open_private(path: &Path) -> Result<fs::File> {
+    match fs::OpenOptions::new().write(true).open(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match create_private(path) {
+            Err(error) if is_already_there(&error) => fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .with_context(|| format!("could not open {}", path.display())),
+            created => created.with_context(|| format!("could not create {}", path.display())),
+        },
+        opened => opened.with_context(|| format!("could not open {}", path.display())),
+    }
+}
+
+fn is_already_there(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|it| it.kind() == std::io::ErrorKind::AlreadyExists)
 }
 
 #[cfg(unix)]

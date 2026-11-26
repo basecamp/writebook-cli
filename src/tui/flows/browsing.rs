@@ -3,9 +3,8 @@ use ratatui::style::Color;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use super::{Instance, Loading, Tui, json, not_found, reply};
+use super::{Gate, Instance, Loading, Tui, json, not_found, reply};
 
 fn paragraphs() -> String {
     (1..=60)
@@ -524,12 +523,14 @@ fn shows_an_instance_whose_server_fails_and_goes_back_to_the_instances() {
 
 #[test]
 fn drops_a_slow_reply_that_arrives_after_the_user_left_its_screen() {
-    let mut tui = Tui::new(|request| match (request.method.as_str(), request.path.as_str()) {
+    let gate = Gate::default();
+    let held = gate.clone();
+    let mut tui = Tui::new(move |request| match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/books.json") => json(
             json!([{ "id": 1, "title": "Handbook", "editable": true }, { "id": 2, "title": "Recipes", "editable": true }]),
         ),
         ("GET", "/books/1/manifest.json") => {
-            std::thread::sleep(Duration::from_millis(500));
+            held.hold();
             json(json!({
                 "book": { "title": "Handbook", "slug": "handbook", "editable": true },
                 "leaves": [{ "id": 10, "type": "Section", "title": "Late section" }]
@@ -545,9 +546,12 @@ fn drops_a_slow_reply_that_arrives_after_the_user_left_its_screen() {
     tui.press(KeyCode::Enter);
     tui.wait_for("Recipes");
     tui.press(KeyCode::Enter);
+    gate.wait_until_held();
     tui.press(KeyCode::Esc);
     tui.press(KeyCode::Down);
     tui.press(KeyCode::Enter);
+    tui.wait_for("2 words");
+    gate.release();
     tui.wait_for_request_count(4);
     tui.wait_for_replies("BookLoaded", 2);
 

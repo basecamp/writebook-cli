@@ -39,7 +39,6 @@ note() {
   fi
 }
 
-# Quietly means quietly when it works and in full when it doesn't.
 step() {
   note "$PURPLE" "▸ $1"
   shift

@@ -1,17 +1,16 @@
 use crossterm::event::KeyCode;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use super::{Tui, body, json, not_found, reply};
+use super::{Gate, Tui, body, json, not_found, reply};
 use crate::scratch::TempDir;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Save {
     Works,
     Conflicts,
     Fails,
-    Slow,
+    Slow(Gate),
 }
 
 fn handbook(save: Save) -> Tui {
@@ -46,10 +45,10 @@ fn handbook(save: Save) -> Tui {
         ("GET", "/books/2/pages/20.json") => {
             json(json!({ "title": "Soup", "body": "Boil water.", "fingerprint": "r1" }))
         }
-        ("PATCH", path) if path.starts_with("/books/1/") => match save {
-            Save::Works | Save::Slow => {
-                if matches!(save, Save::Slow) {
-                    std::thread::sleep(Duration::from_millis(300));
+        ("PATCH", path) if path.starts_with("/books/1/") => match &save {
+            Save::Works | Save::Slow(_) => {
+                if let Save::Slow(gate) = &save {
+                    gate.hold();
                 }
                 let mut saves = saves.lock().unwrap();
                 *saves += 1;
@@ -360,16 +359,20 @@ fn saving_waits_for_an_upload_in_flight() {
 
 #[test]
 fn keys_typed_while_a_save_is_in_flight_are_dropped() {
-    let mut tui = handbook(Save::Slow);
+    let gate = Gate::default();
+    let mut tui = handbook(Save::Slow(gate.clone()));
     open_welcome(&mut tui);
 
     start_editing(&mut tui);
     tui.press(KeyCode::End);
     tui.type_text(" Saved.");
     tui.ctrl('s');
+    gate.wait_until_held();
     tui.type_text(" Extra");
     tui.paste(" pasted");
     tui.press(KeyCode::Esc);
+    gate.release();
+    tui.wait_for_replies("LeafSaved", 1);
 
     let screen = tui.wait_for_gone("stop editing");
     assert!(screen.contains("Hello from the handbook. Saved."), "{screen}");

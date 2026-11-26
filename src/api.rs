@@ -199,7 +199,7 @@ impl Client {
     }
 
     fn request(&mut self, path: &str, request: Request) -> Result<Value> {
-        response_json(self.send_renewing(|client| client.send(path, &request))?)
+        response_json(path, self.send_renewing(|client| client.send(path, &request))?)
     }
 
     fn multipart(&mut self, path: &str, method: MultipartMethod, parts: &[Part]) -> Result<Value> {
@@ -207,7 +207,10 @@ impl Client {
         let body = multipart_body(&boundary, parts);
         let content_type = format!("multipart/form-data; boundary={boundary}");
 
-        response_json(self.send_renewing(|client| client.send_multipart(path, method, &content_type, &body))?)
+        response_json(
+            path,
+            self.send_renewing(|client| client.send_multipart(path, method, &content_type, &body))?,
+        )
     }
 
     fn send_renewing(&mut self, send: impl Fn(&Client) -> Result<Response>) -> Result<Response> {
@@ -341,16 +344,24 @@ pub fn url_on(host: &str, path: &str) -> Result<String> {
     }
 }
 
-fn response_json(mut response: Response) -> Result<Value> {
+fn response_json(path: &str, mut response: Response) -> Result<Value> {
     let status = response.status().as_u16();
-    let body = match response.body_mut().read_to_string() {
-        Ok(text) => serde_json::from_str(&text).unwrap_or(Value::Null),
-        Err(_) => Value::Null,
-    };
+    let text = response.body_mut().read_to_string();
 
     if (200..300).contains(&status) {
-        Ok(body)
+        let text = text.with_context(|| format!("could not read the answer to {path}"))?;
+
+        if text.trim().is_empty() {
+            Ok(Value::Null)
+        } else {
+            serde_json::from_str(&text).with_context(|| format!("the answer to {path} isn't valid JSON"))
+        }
     } else {
+        let body = match text.map(|text| serde_json::from_str(&text)) {
+            Ok(Ok(body)) => body,
+            Ok(Err(_)) | Err(_) => Value::Null,
+        };
+
         Err(ApiError { status, body }.into())
     }
 }

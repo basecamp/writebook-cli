@@ -109,6 +109,38 @@ fn one_command_at_a_time_renews_a_sign_in() {
 }
 
 #[test]
+fn commands_run_side_by_side_share_the_sign_in_folder() {
+    let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
+    let config = tempdir();
+    sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
+    expire_sign_ins(&config);
+
+    let commands: Vec<_> = (0..8)
+        .map(|_| {
+            let config = config.to_path_buf();
+            let url = server.url.clone();
+            std::thread::spawn(move || {
+                (0..3)
+                    .map(|_| {
+                        writebook(
+                            &["book", "list", "--instance", &url],
+                            &[("XDG_CONFIG_HOME", config.to_str().unwrap())],
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+
+    for command in commands {
+        for output in command.join().unwrap() {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(stdout(&output).contains("Ops Handbook"), "{}", stdout(&output));
+        }
+    }
+}
+
+#[test]
 fn says_so_when_the_sign_in_is_in_a_keyring_out_of_reach() {
     let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
     let config = tempdir();
@@ -165,13 +197,24 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
 
     assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777, 0o700);
+    let mut files: Vec<(String, u32)> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+            (entry.file_name().into_string().unwrap(), mode)
+        })
+        .collect();
+    files.sort();
     assert_eq!(
-        std::fs::metadata(folder.join("credentials.json"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
+        files,
+        [
+            ("credentials.json".to_string(), 0o600),
+            ("instances.lock".to_string(), 0o600),
+            ("instances.toml".to_string(), 0o600),
+            ("pending-sign-ins.json".to_string(), 0o600),
+            ("sign-ins.lock".to_string(), 0o600),
+        ]
     );
 }
 
@@ -197,7 +240,10 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
 
     assert_eq!(access_list(&folder), owner_only_access_list());
-    assert_eq!(access_list(&folder.join("credentials.json")), owner_only_access_list());
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        assert_eq!(access_list(&path), owner_only_access_list(), "{}", path.display());
+    }
 }
 
 #[cfg(windows)]

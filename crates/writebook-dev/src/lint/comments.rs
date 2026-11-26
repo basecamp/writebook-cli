@@ -42,8 +42,8 @@ pub(super) fn no_comment_is_a_banner_a_marker_or_code() -> Option<Refusal> {
     }
     refuse(
         &comments,
-        "comments are banners, to-do markers or code: delete them; a banner's sections become \
-         files, a to-do becomes a card, and old code lives in git",
+        "comments are banners, to-do markers or code: split a banner's subjects into files, \
+         record unfinished work outside the code, and delete commented-out code",
     )
 }
 

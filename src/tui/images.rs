@@ -278,6 +278,7 @@ mod tests {
             .collect();
         let sources: Vec<Source> = paths.iter().map(|it| Source::file(it)).collect();
         let newest = sources.len() - 1;
+        let oldest_kept = sources.len() - IMAGES_KEPT;
 
         for path in &paths {
             images.want_file(path, &messages);
@@ -287,6 +288,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(10, 5)).unwrap();
         terminal
             .draw(|frame| {
+                assert!(images.draw(frame, frame.area(), &sources[oldest_kept]));
                 assert!(!images.draw(frame, frame.area(), &sources[0]));
                 assert!(images.draw(frame, frame.area(), &sources[newest]));
             })

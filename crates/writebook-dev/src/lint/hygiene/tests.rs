@@ -55,3 +55,48 @@ fn every_crate_must_take_the_workspace_lints() {
         ["b", "d", "e"]
     );
 }
+
+#[test]
+fn a_rust_file_may_be_a_thousand_lines_but_no_more() {
+    let long = "fn a() {}\n".repeat(1_001);
+    let longest = "fn a() {}\n".repeat(1_000);
+    let notes = "words\n".repeat(2_000);
+
+    assert_eq!(
+        violations(
+            &[
+                ("src/long.rs", &long),
+                ("src/longest.rs", &longest),
+                ("tests/notes.md", &notes)
+            ],
+            no_rust_file_is_over_a_thousand_lines
+        ),
+        ["src/long.rs (1001 lines)"]
+    );
+}
+
+#[test]
+fn nothing_may_be_named_for_a_kind_of_code() {
+    let files = [
+        ("src/utils.rs", ""),
+        ("src/helpers/mod.rs", ""),
+        (
+            "src/main.rs",
+            "mod misc;\npub(crate) mod common;\nmod commonplace;\nmod sign_in;\n",
+        ),
+        ("tests/support/shared.rs", ""),
+        ("src/sign_in.rs", ""),
+        ("docs/util.rs", ""),
+    ];
+
+    assert_eq!(
+        violations(&files, nothing_is_named_for_a_kind_of_code),
+        [
+            "src/helpers",
+            "src/main.rs:1: mod misc;",
+            "src/main.rs:2: pub(crate) mod common;",
+            "src/utils.rs",
+            "tests/support/shared.rs",
+        ]
+    );
+}

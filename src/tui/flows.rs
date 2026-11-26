@@ -15,6 +15,8 @@ mod tiny_terminals;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -119,7 +121,6 @@ impl Tui {
             .collect()
     }
 
-    /// Make the terminal this size, as when the person resizes the window.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     }
@@ -221,6 +222,31 @@ fn kind_of(message: &Message) -> &'static str {
     }
 }
 
+#[derive(Clone, Default)]
+struct Gate {
+    held: Arc<AtomicBool>,
+    open: Arc<AtomicBool>,
+}
+
+impl Gate {
+    fn hold(&self) {
+        self.held.store(true, Ordering::SeqCst);
+        while !self.open.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+    }
+
+    fn wait_until_held(&self) {
+        while !self.held.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+    }
+
+    fn release(&self) {
+        self.open.store(true, Ordering::SeqCst);
+    }
+}
+
 /// A fake Writebook's answer with a JSON body.
 pub fn json(body: serde_json::Value) -> Reply {
     reply(200, &body.to_string())
@@ -230,7 +256,6 @@ pub fn not_found() -> Reply {
     reply(404, r#"{"error":"not found"}"#)
 }
 
-/// The request's JSON body.
 pub fn body(request: &Request) -> serde_json::Value {
     serde_json::from_str(&request.body).unwrap()
 }
