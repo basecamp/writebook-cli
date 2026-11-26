@@ -1,6 +1,3 @@
-//! A checkout's files on disk: what status, push and pull do with a file that
-//! isn't text, can't be read, or can't be removed.
-
 #![cfg(test)]
 
 #[cfg(test)]

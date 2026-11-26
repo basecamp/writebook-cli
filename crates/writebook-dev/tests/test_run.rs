@@ -1,5 +1,3 @@
-//! `bin/dev test run` end to end, with a stand-in for `cargo` on the PATH.
-
 #![cfg(test)]
 
 use std::fs;
