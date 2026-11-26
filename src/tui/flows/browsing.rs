@@ -201,7 +201,7 @@ fn shows_the_books_as_a_gallery_or_a_list_and_moves_the_selection_between_them()
     assert!(screen.contains("books > Books > Recipes"), "{screen}");
 
     tui.press(KeyCode::Esc);
-    tui.wait_for("Recipes");
+    tui.wait_for_replies("BooksLoaded", 2);
     let screen = tui.screen();
     assert!(screen.contains("v gallery view"), "the view stays as chosen:\n{screen}");
 
@@ -549,7 +549,7 @@ fn drops_a_slow_reply_that_arrives_after_the_user_left_its_screen() {
     tui.press(KeyCode::Down);
     tui.press(KeyCode::Enter);
     tui.wait_for_request_count(4);
-    tui.settle();
+    tui.wait_for_replies("BookLoaded", 2);
 
     let screen = tui.screen();
     assert!(screen.contains("books > Books > Recipes"), "{screen}");
@@ -703,7 +703,7 @@ fn a_search_answered_after_newer_words_were_searched_is_dropped_and_marks_are_pl
     tui.press(KeyCode::Enter);
 
     let screen = tui.wait_for("Down the hole: Follow the white rabbit. All is plain & simple");
-    tui.settle();
+    tui.wait_for_replies("Found", 2);
     let screen = format!("{screen}\n{}", tui.screen());
     assert!(!screen.contains("Introduction"), "{screen}");
     assert!(!screen.contains("<mark>"), "{screen}");

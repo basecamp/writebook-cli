@@ -139,7 +139,7 @@ fn a_form_loading_late_does_not_fill_the_form_opened_after_it() {
 
     gate.release();
     tui.wait_for_request("GET", "/books/new.json");
-    tui.settle();
+    tui.wait_for_replies("BookFormLoaded", 2);
     let screen = tui.screen();
     assert!(screen.contains("books > Books > Handbook > Edit"), "{screen}");
     assert!(!screen.contains("New book"), "{screen}");
@@ -182,7 +182,7 @@ fn a_page_loading_late_does_not_replace_the_page_opened_after_it() {
 
     gate.release();
     tui.wait_for_request("GET", "/books/1/pages/10.json");
-    tui.settle();
+    tui.wait_for_replies("LeafLoaded", 2);
     let screen = tui.screen();
     assert!(screen.contains("Boil water."), "{screen}");
     assert!(!screen.contains("Hello from the handbook."), "{screen}");
@@ -235,7 +235,7 @@ fn books_loading_late_arrive_under_the_settings_opened_over_them() {
 
     gate.release();
     tui.wait_for_request("GET", "/books.json");
-    tui.settle();
+    tui.wait_for_replies("BooksLoaded", 1);
     tui.press(KeyCode::Esc);
     let screen = tui.wait_for("Recipes");
     assert!(screen.contains("Handbook"), "{screen}");
@@ -260,7 +260,7 @@ fn a_publishing_reply_reaches_its_overlay_under_the_quit_question_and_blocks_edi
     tui.wait_for("Quit writebook tui?");
     gate.release();
     tui.wait_for_request("PATCH", "/books/1/publication.json");
-    tui.settle();
+    tui.wait_for_replies("Published", 1);
     tui.press(KeyCode::Esc);
     let screen = tui.screen();
     assert!(screen.contains(&format!("{}/1/handbook", tui.server.url)), "{screen}");
@@ -285,7 +285,7 @@ fn search_results_arrive_under_the_quit_question() {
     tui.wait_for("Quit writebook tui?");
     gate.release();
     tui.wait_for_request("GET", "/search.json?q=rabbit");
-    tui.settle();
+    tui.wait_for_replies("Found", 1);
     tui.press(KeyCode::Esc);
     let screen = tui.screen();
     assert!(screen.contains("Search all books"), "{screen}");
@@ -312,7 +312,7 @@ fn only_the_last_invite_reset_shows_its_link() {
 
     gate.release();
     tui.wait_for_request("POST", "/account/join_code.json");
-    tui.settle();
+    tui.wait_for_replies("InviteReset", 2);
     let screen = tui.screen();
     assert!(screen.contains("/join/second"), "{screen}");
     assert!(!screen.contains("/join/first"), "{screen}");
@@ -338,7 +338,7 @@ fn a_profile_saved_late_leaves_the_profile_opened_after_it_alone() {
 
     gate.release();
     tui.wait_for_request("PATCH", "/users/1/profile.json");
-    tui.settle();
+    tui.wait_for_replies("ProfileSaved", 1);
     let screen = tui.screen();
     assert!(screen.contains("••••••"), "{screen}");
     assert!(!screen.contains("Saved."), "{screen}");

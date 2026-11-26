@@ -23,12 +23,13 @@ pub use server::{Reply, Request, Server, reply};
 
 use super::data::Instance;
 use super::images::Images;
-use super::{App, Loading};
+use super::{App, Loading, Message};
 
 pub struct Tui {
     pub app: App,
     pub server: Server,
     terminal: Terminal<TestBackend>,
+    handed_over: Vec<&'static str>,
 }
 
 impl Tui {
@@ -95,12 +96,18 @@ impl Tui {
         )
     }
 
-    /// Take in replies until none arrives for a while: for checking that a
-    /// late one changed nothing.
-    pub fn settle(&mut self) {
-        while let Ok(message) = self.app.receiver.recv_timeout(Duration::from_millis(200)) {
-            self.app.receive(message);
-        }
+    /// Draw until the app has been handed this many replies of a kind, such as `"BookLoaded"`, since the start.
+    pub fn wait_for_replies(&mut self, kind: &'static str, count: usize) {
+        self.eventually(
+            |tui| {
+                if tui.handed_over.iter().filter(|it| **it == kind).count() < count {
+                    None
+                } else {
+                    Some(())
+                }
+            },
+            |tui| format!("the app was handed only {:?}", tui.handed_over),
+        )
     }
 
     /// Every method and path the server saw, in order.
@@ -154,6 +161,7 @@ impl Tui {
             app,
             server,
             terminal: Terminal::new(TestBackend::new(100, 40)).unwrap(),
+            handed_over: Vec::new(),
         }
     }
 
@@ -178,12 +186,38 @@ impl Tui {
         while found.is_none() {
             assert!(started.elapsed() < PATIENCE, "{}", failure(self));
             if let Ok(message) = self.app.receiver.recv_timeout(Duration::from_millis(20)) {
+                self.handed_over.push(kind_of(&message));
                 self.app.receive(message);
             }
             found = check(self);
         }
 
         found.expect("the loop ends once the check finds a value")
+    }
+}
+
+fn kind_of(message: &Message) -> &'static str {
+    match message {
+        Message::Instances(_) => "Instances",
+        Message::Image(..) => "Image",
+        Message::To(_, reply) => match reply {
+            super::Reply::BooksLoaded(_) => "BooksLoaded",
+            super::Reply::BookLoaded(_) => "BookLoaded",
+            super::Reply::LeavesChanged(_) => "LeavesChanged",
+            super::Reply::Published(..) => "Published",
+            super::Reply::BookFormLoaded(_) => "BookFormLoaded",
+            super::Reply::BookSaved(_) => "BookSaved",
+            super::Reply::BookDeleted(_) => "BookDeleted",
+            super::Reply::Found(..) => "Found",
+            super::Reply::LeafLoaded(_) => "LeafLoaded",
+            super::Reply::LeafSaved(_) => "LeafSaved",
+            super::Reply::Uploaded(_) => "Uploaded",
+            super::Reply::PeopleLoaded(_) => "PeopleLoaded",
+            super::Reply::PeopleChanged(_) => "PeopleChanged",
+            super::Reply::InviteReset(..) => "InviteReset",
+            super::Reply::ProfileLoaded(_) => "ProfileLoaded",
+            super::Reply::ProfileSaved(_) => "ProfileSaved",
+        },
     }
 }
 
