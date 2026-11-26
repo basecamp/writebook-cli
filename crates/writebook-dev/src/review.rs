@@ -47,10 +47,13 @@ pub fn run(post: bool) -> Result<(), Box<dyn Error>> {
 }
 
 fn refuse_uncommitted() -> Result<(), Box<dyn Error>> {
-    if git(&["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
+    if git(&["status", "--porcelain"])?.is_empty() {
         Ok(())
     } else {
-        Err("the worktree has changes that aren't committed: a review reads commits, so commit them first".into())
+        Err(
+            "the worktree has changes or files that aren't committed: a review reads commits, so commit them first"
+                .into(),
+        )
     }
 }
 

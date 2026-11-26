@@ -50,11 +50,13 @@ struct Scenario {
     claude_stderr: &'static str,
     claude_status: i32,
     arguments: &'static [&'static str],
+    untracked: Option<&'static str>,
 }
 
 struct Outcome {
     success: bool,
     stdout: String,
+    stderr: String,
     head: String,
     base: String,
     log: TempDir,
@@ -98,6 +100,7 @@ impl Scenario {
             claude_stderr: "",
             claude_status: 0,
             arguments: &[],
+            untracked: None,
         }
     }
 
@@ -125,6 +128,9 @@ impl Scenario {
         git(&work, &["add", "."]);
         git(&work, &["commit", "-q", "-m", "Sign in"]);
         let head = git(&work, &["rev-parse", "HEAD"]);
+        if let Some(name) = self.untracked {
+            fs::write(work.join(name), "mod new_module;\n").expect("the untracked file is written");
+        }
 
         fs::create_dir_all(&bin).expect("the bin directory is made");
         for (name, script) in [("cargo", CARGO), ("gh", GH), ("codex", CODEX), ("claude", CLAUDE)] {
@@ -152,6 +158,7 @@ impl Scenario {
         Outcome {
             success: done.status.success(),
             stdout: String::from_utf8(done.stdout).expect("its output is text"),
+            stderr: String::from_utf8(done.stderr).expect("its errors are text"),
             head,
             base,
             log,
@@ -317,6 +324,25 @@ fn a_branch_without_a_pull_request_is_reviewed_but_not_posted() {
             .expect("codex was asked")
             .contains("<description>\nThe branch has no pull request, so there is no description.\n</description>")
     );
+    assert_eq!(None, outcome.logged("gh.api"));
+}
+
+#[test]
+fn a_file_that_isnt_committed_stops_the_review_before_anyone_reads_it() {
+    let mut scenario = Scenario::new();
+    scenario.untracked = Some("new_module.rs");
+
+    let outcome = scenario.run();
+
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .stderr
+            .contains("the worktree has changes or files that aren't committed"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(None, outcome.logged("codex.prompt"));
     assert_eq!(None, outcome.logged("gh.api"));
 }
 
