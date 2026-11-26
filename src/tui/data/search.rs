@@ -23,15 +23,12 @@ pub fn search(host: &str, book_id: Option<u64>, query: &str) -> Result<Vec<Found
 
     Ok(crate::read::find(&web, book_id, query)?
         .into_iter()
-        .map(|hit| {
-            let target = crate::web::parse_target(&hit.url).ok();
-            Found {
-                book: hit.book,
-                title: hit.title,
-                snippet: hit.marked_snippet.unwrap_or_else(|| escaped(&hit.snippet)),
-                book_id: target.as_ref().and_then(|it| it.book_id),
-                leaf_id: target.and_then(|it| it.leaf_id),
-            }
+        .map(|hit| Found {
+            book: hit.book,
+            title: hit.title,
+            snippet: hit.marked_snippet.unwrap_or_else(|| escaped(&hit.snippet)),
+            book_id: hit.book_id,
+            leaf_id: hit.leaf_id,
         })
         .collect())
 }

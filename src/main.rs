@@ -2,12 +2,14 @@ mod api;
 mod checkout;
 mod clone;
 mod completions;
+mod config;
 mod creds;
-mod diff_cmd;
+mod diff;
 mod fsutil;
 mod index;
 mod instance;
 mod inventory;
+mod leaf_kind;
 mod mcp;
 mod merge;
 mod output;
@@ -366,7 +368,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Pull => pull::run(),
         Command::Push => push::run(),
         Command::Status => status::run(),
-        Command::Diff { remote } => diff_cmd::run(remote),
+        Command::Diff { remote } => diff::run(remote),
         Command::Instance { command } => match command {
             InstanceCommand::Add {
                 url,

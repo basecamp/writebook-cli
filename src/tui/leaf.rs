@@ -482,6 +482,7 @@ fn row_height(row: &Row, image_height: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::leaf_kind::LeafKind;
     use crate::tui::index::Index;
     use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
@@ -490,7 +491,7 @@ mod tests {
     fn page(body: &str) -> LeafPage {
         let leaf = Leaf {
             id: 1,
-            kind: "Page".to_string(),
+            kind: LeafKind::Page,
             title: "On call".to_string(),
             word_count: None,
             preview: None,
@@ -534,7 +535,7 @@ mod tests {
         page.leaves = (1..=40)
             .map(|id| Leaf {
                 id,
-                kind: "Page".to_string(),
+                kind: LeafKind::Page,
                 title: format!("Page {id}"),
                 word_count: None,
                 preview: None,
@@ -576,7 +577,7 @@ mod tests {
     #[test]
     fn a_section_taller_than_the_screen_wraps_and_scrolls() {
         let mut page = page(&"Part one of the handbook covers everything about being on call. ".repeat(8));
-        page.leaves[0].kind = "Section".to_string();
+        page.leaves[0].kind = LeafKind::Section;
         assert!(
             drawn(&mut page)
                 .iter()

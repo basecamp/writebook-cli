@@ -16,6 +16,10 @@ pub struct Hit {
     /// Writebooks from before it was added don't send it.
     #[serde(skip)]
     pub marked_snippet: Option<String>,
+    #[serde(skip)]
+    pub book_id: Option<u64>,
+    #[serde(skip)]
+    pub leaf_id: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -125,17 +129,23 @@ fn search_api(web: &Web, book_id: Option<u64>, query: &str) -> Result<Option<Vec
                 search
                     .results
                     .into_iter()
-                    .map(|hit| Hit {
-                        // One book's search names no book, as the search page doesn't
-                        book: if book_id.is_some() {
-                            String::new()
-                        } else {
-                            hit.book.title
-                        },
-                        title: hit.title,
-                        url: hit.url,
-                        snippet: one_line(&hit.snippet.unwrap_or_default()),
-                        marked_snippet: hit.marked_snippet,
+                    .map(|hit| {
+                        let target = web::parse_target(&hit.url).ok();
+
+                        Hit {
+                            // One book's search names no book, as the search page doesn't
+                            book: if book_id.is_some() {
+                                String::new()
+                            } else {
+                                hit.book.title
+                            },
+                            title: hit.title,
+                            url: hit.url,
+                            snippet: one_line(&hit.snippet.unwrap_or_default()),
+                            marked_snippet: hit.marked_snippet,
+                            book_id: target.as_ref().and_then(|it| it.book_id),
+                            leaf_id: target.and_then(|it| it.leaf_id),
+                        }
                     })
                     .collect(),
             ))
@@ -153,12 +163,17 @@ fn search_pages(web: &Web, book_id: Option<u64>, query: &str) -> Result<Vec<Hit>
 
     for (book_id, book_title) in books {
         for hit in search_book(web, book_id, query)? {
+            let url = web.url(&hit.path);
+            let leaf_id = web::parse_target(&url).ok().and_then(|it| it.leaf_id);
+
             hits.push(Hit {
                 book: book_title.clone(),
                 title: hit.title,
-                url: web.url(&hit.path),
+                url,
                 snippet: hit.snippet,
                 marked_snippet: None,
+                book_id: Some(book_id),
+                leaf_id,
             });
         }
     }

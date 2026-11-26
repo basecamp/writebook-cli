@@ -11,6 +11,7 @@ use crate::api::{self, ApiError, Part, PartData};
 use crate::checkout::{self, Checkout, LeafState, State};
 use crate::creds;
 use crate::index::{self, BookMeta, Entry};
+use crate::leaf_kind::LeafKind;
 use crate::merge;
 use crate::plan;
 use crate::sync;
@@ -122,7 +123,7 @@ fn create_leaf(
             let id = leaf_id(&response)?;
             let mut leaf = LeafState {
                 id,
-                kind: "Page".to_string(),
+                kind: LeafKind::Page,
                 title: title.clone(),
                 fingerprint: fingerprint(&response),
                 filename: Some(filename.clone()),
@@ -153,7 +154,7 @@ fn create_leaf(
             let id = leaf_id(&response)?;
             state.leaves.push(LeafState {
                 id,
-                kind: "Section".to_string(),
+                kind: LeafKind::Section,
                 title: title.clone(),
                 fingerprint: fingerprint(&response),
                 filename: filename.clone(),
@@ -175,7 +176,7 @@ fn create_leaf(
             let id = leaf_id(&response)?;
             state.leaves.push(LeafState {
                 id,
-                kind: "Picture".to_string(),
+                kind: LeafKind::Picture,
                 title: caption.clone(),
                 fingerprint: fingerprint(&response),
                 filename: Some(filename.clone()),
@@ -212,7 +213,7 @@ fn update_leaf(
 
             let response = guarded_patch(
                 client,
-                &sync::leaf_path(book_id, "Section", known.id),
+                &sync::leaf_path(book_id, &LeafKind::Section, known.id),
                 &json!({
                     "leaf": { "title": title },
                     "section": section_params(&body, theme),
@@ -244,11 +245,11 @@ fn update_leaf(
                     data: PartData::Text(&known.fingerprint),
                 });
 
-                guarded(client.patch_multipart(&sync::leaf_path(book_id, "Picture", known.id), &parts))?
+                guarded(client.patch_multipart(&sync::leaf_path(book_id, &LeafKind::Picture, known.id), &parts))?
             } else {
                 guarded_patch(
                     client,
-                    &sync::leaf_path(book_id, "Picture", known.id),
+                    &sync::leaf_path(book_id, &LeafKind::Picture, known.id),
                     &json!({
                         "leaf": { "title": caption },
                         "picture": { "caption": caption },
@@ -311,7 +312,7 @@ fn push_page_body(
     let filename = entry.filename().expect("a page always has a file").to_string();
     let mut body = checkout.read_working(&filename)?;
 
-    let shown = client.get(&sync::leaf_path(book_id, "Page", leaf.id))?;
+    let shown = client.get(&sync::leaf_path(book_id, &LeafKind::Page, leaf.id))?;
     let record_gid = shown["record_gid"]
         .as_str()
         .context("the server sent no upload gid")?
@@ -378,7 +379,7 @@ fn push_page_body(
 
     let response = guarded_patch(
         client,
-        &sync::leaf_path(book_id, "Page", leaf.id),
+        &sync::leaf_path(book_id, &LeafKind::Page, leaf.id),
         &json!({
             "leaf": { "title": leaf.title },
             "page": { "body": merge::globalize_upload_urls(&body) },

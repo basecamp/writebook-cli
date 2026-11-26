@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::{creds, fsutil, web};
+use crate::{config, fsutil, web};
 
 pub const DEFAULT_PROFILE: &str = "default";
 
@@ -49,7 +49,7 @@ impl Inventory {
     /// change, and save it, so two commands running at once don't overwrite
     /// each other's changes.
     pub fn update<T>(change: impl FnOnce(&mut Inventory) -> Result<T>) -> Result<T> {
-        let lock = lock_file()?;
+        let lock = config::lock_file("instances.lock")?;
         lock.lock().context("could not lock the instance list")?;
 
         let mut inventory = Inventory::load()?;
@@ -186,15 +186,5 @@ pub fn host_of(url: &str) -> Result<String> {
 }
 
 fn path() -> Result<PathBuf> {
-    Ok(creds::config_dir()?.join("instances.toml"))
-}
-
-fn lock_file() -> Result<std::fs::File> {
-    let path = creds::config_dir()?.join("instances.lock");
-    std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("could not open {}", path.display()))
+    Ok(config::dir()?.join("instances.toml"))
 }

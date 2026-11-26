@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::Connection;
 use crate::api::ApiError;
 use crate::inventory::Inventory;
+use crate::leaf_kind::LeafKind;
 use crate::{creds, read, sync};
 
 const SEARCH_LIMIT: usize = 50;
@@ -248,14 +249,14 @@ fn read_page(connection: &Connection, arguments: &JsonObject) -> Result<Value> {
     };
 
     let content = sync::fetch_leaf(&mut client, book_id, &leaf.kind, page_id)?;
-    let markdown = match leaf.kind.as_str() {
-        "Picture" => content.caption,
-        _ => content.body,
+    let markdown = match leaf.kind {
+        LeafKind::Picture => content.caption,
+        LeafKind::Page | LeafKind::Section | LeafKind::Unknown(_) => content.body,
     };
 
     Ok(json!({
         "id": page_id,
-        "type": leaf.kind.to_lowercase(),
+        "type": leaf.kind.name().to_lowercase(),
         "title": content.title,
         "markdown": markdown.unwrap_or_default(),
         "fingerprint": content.fingerprint,
@@ -312,7 +313,7 @@ fn update_page(connection: &Connection, arguments: &JsonObject) -> Result<Value>
 
     match connection
         .client()?
-        .patch(&sync::leaf_path(book_id, "Page", page_id), &body)
+        .patch(&sync::leaf_path(book_id, &LeafKind::Page, page_id), &body)
     {
         Ok(response) => created(&response),
         Err(error) if error.downcast_ref::<ApiError>().is_some_and(|it| it.status == 409) => {

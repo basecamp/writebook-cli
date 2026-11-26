@@ -1,16 +1,56 @@
-//! Shared machinery for bringing remote content onto disk: fetching leaf
-//! content, materializing new leaves as local files, and keeping embedded
-//! uploads mirrored in assets/.
+//! Shared machinery for bringing remote content onto disk: reading the book's
+//! manifest, fetching leaf content, materializing new leaves as local files,
+//! and keeping embedded uploads mirrored in assets/.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api;
 use crate::checkout::{self, Checkout, LeafState, State};
 use crate::fsutil;
 use crate::index::{BookMeta, Entry};
+use crate::leaf_kind::LeafKind;
 use crate::merge;
-use crate::plan::{Manifest, ManifestLeaf, RemoteFile};
+
+#[derive(Deserialize)]
+pub struct Manifest {
+    pub book: ManifestBook,
+    pub leaves: Vec<ManifestLeaf>,
+}
+
+#[derive(Deserialize)]
+pub struct ManifestBook {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub author: Option<String>,
+    pub theme: String,
+    pub slug: String,
+    pub fingerprint: String,
+    pub cover: Option<RemoteFile>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ManifestLeaf {
+    pub id: u64,
+    #[serde(rename = "type")]
+    pub kind: LeafKind,
+    pub title: String,
+    pub fingerprint: String,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct RemoteFile {
+    pub checksum: String,
+    pub filename: String,
+    pub url: String,
+}
+
+impl Manifest {
+    pub fn parse(value: &serde_json::Value) -> Result<Manifest> {
+        serde_json::from_value(value.clone()).context("could not understand the server's manifest")
+    }
+}
 
 pub struct RemoteLeafContent {
     pub title: String,
@@ -26,11 +66,11 @@ pub fn fetch_manifest(client: &mut api::Client, book_id: u64) -> Result<Manifest
     Manifest::parse(&value)
 }
 
-pub fn leaf_path(book_id: u64, kind: &str, leaf_id: u64) -> String {
-    format!("/books/{book_id}/{}s/{leaf_id}.json", kind.to_lowercase())
+pub fn leaf_path(book_id: u64, kind: &LeafKind, leaf_id: u64) -> String {
+    format!("/books/{book_id}/{}s/{leaf_id}.json", kind.name().to_lowercase())
 }
 
-pub fn fetch_leaf(client: &mut api::Client, book_id: u64, kind: &str, leaf_id: u64) -> Result<RemoteLeafContent> {
+pub fn fetch_leaf(client: &mut api::Client, book_id: u64, kind: &LeafKind, leaf_id: u64) -> Result<RemoteLeafContent> {
     let value = client.get(&leaf_path(book_id, kind, leaf_id))?;
     Ok(parse_leaf_content(&value))
 }
@@ -59,8 +99,8 @@ pub fn materialize_leaf(
 ) -> Result<Option<Entry>> {
     let content = fetch_leaf(client, book_id, &leaf.kind, leaf.id)?;
 
-    match leaf.kind.as_str() {
-        "Page" => {
+    match &leaf.kind {
+        LeafKind::Page => {
             let filename = claim_filename(page_filename(&leaf.title, leaf.id), taken);
             let body = merge::localize_upload_urls(&content.body.unwrap_or_default());
             mirror_uploads(client, checkout, state, &body)?;
@@ -77,7 +117,7 @@ pub fn materialize_leaf(
                 filename,
             }))
         }
-        "Section" => {
+        LeafKind::Section => {
             let body = content.body.unwrap_or_default();
 
             let filename = if body.is_empty() {
@@ -101,7 +141,7 @@ pub fn materialize_leaf(
                 theme: content.theme,
             }))
         }
-        "Picture" => {
+        LeafKind::Picture => {
             // A picture's index line carries its caption, so that's the title
             // we track; the leaf's own title stays server-side.
             let caption = content.caption.unwrap_or_default();
@@ -131,7 +171,7 @@ pub fn materialize_leaf(
                 }
             }
         }
-        other => anyhow::bail!("the server sent an unknown leaf type: {other}"),
+        LeafKind::Unknown(other) => anyhow::bail!("the server sent an unknown leaf type: {other}"),
     }
 }
 

@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::fsutil;
+use crate::leaf_kind::LeafKind;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Config {
@@ -47,7 +48,7 @@ pub struct CoverState {
 pub struct LeafState {
     pub id: u64,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: LeafKind,
     pub title: String,
     pub fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,21 +65,21 @@ impl LeafState {
     /// The index.md line this leaf had at last sync. Imageless pictures have
     /// no line at all.
     pub fn entry(&self) -> Option<crate::index::Entry> {
-        match self.kind.as_str() {
-            "Page" => self.filename.clone().map(|filename| crate::index::Entry::Page {
+        match &self.kind {
+            LeafKind::Page => self.filename.clone().map(|filename| crate::index::Entry::Page {
                 title: self.title.clone(),
                 filename,
             }),
-            "Section" => Some(crate::index::Entry::Section {
+            LeafKind::Section => Some(crate::index::Entry::Section {
                 title: self.title.clone(),
                 filename: self.filename.clone(),
                 theme: self.theme.clone(),
             }),
-            "Picture" => self.filename.clone().map(|filename| crate::index::Entry::Picture {
+            LeafKind::Picture => self.filename.clone().map(|filename| crate::index::Entry::Picture {
                 caption: self.title.clone(),
                 filename,
             }),
-            _ => None,
+            LeafKind::Unknown(_) => None,
         }
     }
 }

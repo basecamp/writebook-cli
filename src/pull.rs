@@ -9,9 +9,10 @@ use anyhow::{Result, bail};
 use crate::api;
 use crate::checkout::{Checkout, State};
 use crate::index::{self, Entry};
+use crate::leaf_kind::LeafKind;
 use crate::merge;
-use crate::plan::{self, ManifestLeaf};
-use crate::sync::{self, RemoteLeafContent};
+use crate::plan;
+use crate::sync::{self, ManifestLeaf, RemoteLeafContent};
 
 pub fn run() -> Result<()> {
     let checkout = Checkout::find()?;
@@ -47,7 +48,7 @@ fn land_remote_changes(
     mut state: State,
     mut client: api::Client,
     document: &index::Document,
-    manifest: &plan::Manifest,
+    manifest: &sync::Manifest,
     comparison: &plan::Comparison,
 ) -> Result<()> {
     let mut conflicts = Vec::new();
@@ -180,8 +181,8 @@ fn apply_remote_change(
     taken: &mut Vec<String>,
     conflicts: &mut Vec<String>,
 ) -> Result<Option<Entry>> {
-    let entry = match leaf.kind.as_str() {
-        "Page" => {
+    let entry = match &leaf.kind {
+        LeafKind::Page => {
             let body = merge::localize_upload_urls(&content.body.clone().unwrap_or_default());
             sync::mirror_uploads(client, checkout, state, &body)?;
 
@@ -196,7 +197,7 @@ fn apply_remote_change(
                 filename,
             })
         }
-        "Section" => {
+        LeafKind::Section => {
             let body = content.body.clone().unwrap_or_default();
             let filename = apply_section_body(checkout, state, position, leaf, &content, &body, taken, conflicts)?;
             state.leaves[position].theme = content.theme.clone();
@@ -207,21 +208,21 @@ fn apply_remote_change(
                 theme: content.theme.clone(),
             })
         }
-        "Picture" => {
+        LeafKind::Picture => {
             let caption = content.caption.clone().unwrap_or_default();
             let filename = apply_picture_image(client, checkout, state, position, &content, taken)?;
 
             filename.map(|filename| Entry::Picture { caption, filename })
         }
-        other => bail!("the server sent an unknown leaf type: {other}"),
+        LeafKind::Unknown(other) => bail!("the server sent an unknown leaf type: {other}"),
     };
 
     let leaf_state = &mut state.leaves[position];
     leaf_state.fingerprint = content.fingerprint;
 
-    leaf_state.title = match leaf.kind.as_str() {
-        "Picture" => content.caption.unwrap_or_default(),
-        _ => content.title,
+    leaf_state.title = match leaf.kind {
+        LeafKind::Picture => content.caption.unwrap_or_default(),
+        LeafKind::Page | LeafKind::Section | LeafKind::Unknown(_) => content.title,
     };
 
     Ok(entry)

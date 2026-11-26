@@ -1,4 +1,5 @@
 use super::*;
+use crate::leaf_kind::LeafKind;
 
 const HOST: &str = "https://books.example.com";
 
@@ -84,7 +85,7 @@ fn form(id: Option<u64>, title: &str) -> BookForm {
 fn leaf(id: u64) -> data::Leaf {
     data::Leaf {
         id,
-        kind: "Page".to_string(),
+        kind: LeafKind::Page,
         title: format!("Page {id}"),
         word_count: None,
         preview: None,

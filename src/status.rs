@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::api;
 use crate::checkout::{Checkout, Remote};
 use crate::index;
-use crate::plan::{self, Comparison, Manifest};
-use crate::sync;
+use crate::plan::{self, Comparison};
+use crate::sync::{self, Manifest};
 
 pub fn run() -> Result<()> {
     let checkout = Checkout::find()?;
@@ -112,7 +112,11 @@ fn print_remote_changes(comparison: &Comparison) {
     }
 
     for leaf in &comparison.added_remotely {
-        lines.push(format!("added:      {} \"{}\"", leaf.kind.to_lowercase(), leaf.title));
+        lines.push(format!(
+            "added:      {} \"{}\"",
+            leaf.kind.name().to_lowercase(),
+            leaf.title
+        ));
     }
 
     if comparison.order_changed_remotely {

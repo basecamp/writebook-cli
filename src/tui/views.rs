@@ -395,7 +395,7 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
 
 pub fn leaf_title(leaf: &Leaf) -> String {
     if leaf.title.is_empty() {
-        format!("Untitled {}", leaf.kind.to_lowercase())
+        format!("Untitled {}", leaf.kind.name().to_lowercase())
     } else {
         leaf.title.clone()
     }

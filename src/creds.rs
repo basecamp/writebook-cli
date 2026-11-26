@@ -15,12 +15,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::IsTerminal;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api;
-use crate::fsutil;
 use crate::inventory;
 
 mod sign_in;
@@ -437,21 +435,6 @@ fn credentials_from(body: &Value) -> Result<Credentials> {
 
 fn expired(credentials: &Credentials) -> bool {
     credentials.expires_at <= now() + EXPIRY_SLACK
-}
-
-/// Where sign-ins and the instance list are kept, created readable by you
-/// alone if it isn't there yet.
-pub fn config_dir() -> Result<PathBuf> {
-    let dir = if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|it| !it.is_empty()) {
-        PathBuf::from(dir).join("writebook")
-    } else {
-        dirs::home_dir()
-            .context("could not determine the home directory")?
-            .join(".config/writebook")
-    };
-
-    fsutil::create_private_dir(&dir)?;
-    Ok(dir)
 }
 
 fn someone_can_approve() -> bool {

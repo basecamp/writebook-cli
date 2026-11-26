@@ -2,50 +2,12 @@
 //! snapshot, the working files, and (when online) the remote manifest, work
 //! out what changed on which side.
 
-use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use anyhow::{Result, bail};
 
 use crate::checkout::{Checkout, LeafState, State};
 use crate::index::{Document, Entry};
-
-#[derive(Deserialize)]
-pub struct Manifest {
-    pub book: ManifestBook,
-    pub leaves: Vec<ManifestLeaf>,
-}
-
-#[derive(Deserialize)]
-pub struct ManifestBook {
-    pub title: String,
-    pub subtitle: Option<String>,
-    pub author: Option<String>,
-    pub theme: String,
-    pub slug: String,
-    pub fingerprint: String,
-    pub cover: Option<RemoteFile>,
-}
-
-#[derive(Deserialize, Clone)]
-pub struct ManifestLeaf {
-    pub id: u64,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub title: String,
-    pub fingerprint: String,
-}
-
-#[derive(Deserialize, Clone)]
-pub struct RemoteFile {
-    pub checksum: String,
-    pub filename: String,
-    pub url: String,
-}
-
-impl Manifest {
-    pub fn parse(value: &serde_json::Value) -> Result<Manifest> {
-        serde_json::from_value(value.clone()).context("could not understand the server's manifest")
-    }
-}
+use crate::leaf_kind::LeafKind;
+use crate::sync::{Manifest, ManifestLeaf};
 
 /// One known leaf, seen from all three sides.
 pub struct LeafComparison {
@@ -276,7 +238,7 @@ fn claim_entries(state: &State, working: &[Entry], checkout: &Checkout) -> Resul
     }
 
     for (position, leaf) in state.leaves.iter().enumerate() {
-        if claims[position].is_none() && leaf.kind == "Section" && leaf.filename.is_none() {
+        if claims[position].is_none() && leaf.kind == LeafKind::Section && leaf.filename.is_none() {
             if let Some(entry) = working.iter().find(|it| {
                 matches!(it, Entry::Section { filename: None, .. })
                     && it.title() == leaf.title
@@ -289,7 +251,7 @@ fn claim_entries(state: &State, working: &[Entry], checkout: &Checkout) -> Resul
     }
 
     for (position, leaf) in state.leaves.iter().enumerate() {
-        if claims[position].is_none() && leaf.kind == "Page" {
+        if claims[position].is_none() && leaf.kind == LeafKind::Page {
             if let Some(base_filename) = &leaf.filename {
                 let base_content = checkout.read_base_or_empty(base_filename)?;
 

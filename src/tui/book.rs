@@ -422,14 +422,15 @@ fn words(count: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::leaf_kind::LeafKind;
     use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     fn handbook() -> BookPage {
-        let leaf = |id, kind: &str, title: &str, word_count| Leaf {
+        let leaf = |id, kind, title: &str, word_count| Leaf {
             id,
-            kind: kind.to_string(),
+            kind,
             title: title.to_string(),
             word_count,
             preview: None,
@@ -448,9 +449,9 @@ mod tests {
             published: false,
             editable: true,
             leaves: vec![
-                leaf(1, "Section", "Part one", None),
-                leaf(2, "Page", "On call", Some(1234)),
-                leaf(3, "Page", "", Some(1)),
+                leaf(1, LeafKind::Section, "Part one", None),
+                leaf(2, LeafKind::Page, "On call", Some(1234)),
+                leaf(3, LeafKind::Page, "", Some(1)),
             ],
         });
         screen

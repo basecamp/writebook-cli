@@ -3,9 +3,9 @@ use serde::Serialize;
 
 use super::{cli_api_json, connect, not_readable, unexpected};
 use crate::checkout;
+use crate::leaf_kind::LeafKind;
 use crate::output::{self, Breadcrumb, Format};
-use crate::plan::Manifest;
-use crate::sync;
+use crate::sync::{self, Manifest};
 use crate::web::{self, Target, Web};
 
 #[derive(Serialize)]
@@ -130,7 +130,7 @@ fn document_from_manifest(web: &Web, book_id: u64, leaf_id: Option<u64>, manifes
     }
 }
 
-fn leaf_markdown(web: &Web, book_id: u64, kind: &str, leaf_id: u64) -> Result<String> {
+fn leaf_markdown(web: &Web, book_id: u64, kind: &LeafKind, leaf_id: u64) -> Result<String> {
     let path = sync::leaf_path(book_id, kind, leaf_id);
     let value = match cli_api_json(web, &path)? {
         Some(value) => value,
@@ -139,8 +139,8 @@ fn leaf_markdown(web: &Web, book_id: u64, kind: &str, leaf_id: u64) -> Result<St
     let content = sync::parse_leaf_content(&value);
 
     Ok(match kind {
-        "Picture" => content.caption.unwrap_or_default(),
-        _ => content.body.unwrap_or_default(),
+        LeafKind::Picture => content.caption.unwrap_or_default(),
+        LeafKind::Page | LeafKind::Section | LeafKind::Unknown(_) => content.body.unwrap_or_default(),
     })
 }
 

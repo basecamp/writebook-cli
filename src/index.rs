@@ -17,6 +17,8 @@
 
 use anyhow::{Context, Result, bail};
 
+use crate::leaf_kind::LeafKind;
+
 pub struct Document {
     pub meta: BookMeta,
     pub entries: Vec<Entry>,
@@ -77,11 +79,11 @@ impl Entry {
         }
     }
 
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> LeafKind {
         match self {
-            Entry::Section { .. } => "Section",
-            Entry::Page { .. } => "Page",
-            Entry::Picture { .. } => "Picture",
+            Entry::Section { .. } => LeafKind::Section,
+            Entry::Page { .. } => LeafKind::Page,
+            Entry::Picture { .. } => LeafKind::Picture,
         }
     }
 }

@@ -18,11 +18,11 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use super::{
-    Access, CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, config_dir, credentials_from, ensure_private_connection,
+    Access, CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, credentials_from, ensure_private_connection,
     error_description, now, post_token_request, request_device_authorization, revoke, someone_can_approve, storage,
     string_field,
 };
-use crate::{fsutil, inventory};
+use crate::{config, fsutil, inventory};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct PendingSignIn {
@@ -383,5 +383,5 @@ fn save_pending(file: &PendingSignIns) -> Result<()> {
 }
 
 fn pending_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join("pending-sign-ins.json"))
+    Ok(config::dir()?.join("pending-sign-ins.json"))
 }

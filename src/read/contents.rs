@@ -5,7 +5,7 @@ use super::{book_on_instance, cli_api_json, connect};
 use crate::checkout;
 use crate::inventory;
 use crate::output::{self, Breadcrumb, Format};
-use crate::plan::Manifest;
+use crate::sync::Manifest;
 use crate::web::Web;
 
 #[derive(Serialize)]
@@ -82,7 +82,7 @@ pub fn book_contents(web: &Web, book_id: u64) -> Result<Contents> {
         .iter()
         .map(|leaf| Leaf {
             id: leaf.id,
-            kind: leaf.kind.to_lowercase(),
+            kind: leaf.kind.name().to_lowercase(),
             title: leaf.title.clone(),
             url: format!("{book_url}/{}/{}", leaf.id, checkout::slugify(&leaf.title)),
         })

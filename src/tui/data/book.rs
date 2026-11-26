@@ -4,6 +4,7 @@ use serde_json::json;
 
 use super::{File, client, expand_home, text};
 use crate::api::{Part, PartData};
+use crate::leaf_kind::LeafKind;
 use crate::{creds, sync};
 
 pub struct Book {
@@ -23,7 +24,7 @@ pub struct Book {
 pub struct Leaf {
     pub id: u64,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: LeafKind,
     pub title: String,
     pub word_count: Option<u64>,
     pub preview: Option<String>,
@@ -32,11 +33,11 @@ pub struct Leaf {
 
 impl Leaf {
     pub fn is_section(&self) -> bool {
-        self.kind == "Section"
+        self.kind == LeafKind::Section
     }
 
     pub fn is_picture(&self) -> bool {
-        self.kind == "Picture"
+        self.kind == LeafKind::Picture
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::checkout::CoverState;
 use crate::scratch::TempDir;
+use crate::sync::{ManifestBook, ManifestLeaf};
 
 const META: &str = "---\ntitle: Book\nsubtitle: \nauthor: \ntheme: blue\n---\n\n";
 
@@ -42,7 +43,7 @@ fn fixture() -> (ScratchCheckout, State, Document) {
         leaves: vec![
             LeafState {
                 id: 1,
-                kind: "Section".into(),
+                kind: LeafKind::Section,
                 title: "Part One".into(),
                 fingerprint: "s1".into(),
                 filename: None,
@@ -52,7 +53,7 @@ fn fixture() -> (ScratchCheckout, State, Document) {
             },
             LeafState {
                 id: 2,
-                kind: "Page".into(),
+                kind: LeafKind::Page,
                 title: "Intro".into(),
                 fingerprint: "p2".into(),
                 filename: Some("intro.md".into()),
@@ -62,7 +63,7 @@ fn fixture() -> (ScratchCheckout, State, Document) {
             },
             LeafState {
                 id: 3,
-                kind: "Picture".into(),
+                kind: LeafKind::Picture,
                 title: "A pic".into(),
                 fingerprint: "i3".into(),
                 filename: Some("assets/pic.jpg".into()),
@@ -327,7 +328,7 @@ fn remote_fingerprints_drive_remote_classification() {
     manifest.leaves.remove(0);
     manifest.leaves.push(ManifestLeaf {
         id: 9,
-        kind: "Page".into(),
+        kind: LeafKind::Page,
         title: "New".into(),
         fingerprint: "n9".into(),
     });

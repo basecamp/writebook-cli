@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use super::{Credentials, config_dir};
-use crate::{fsutil, inventory};
+use super::Credentials;
+use crate::{config, fsutil, inventory};
 
 const SERVICE: &str = "writebook";
 const AVAILABILITY_PROBE: &str = "writebook::availability";
@@ -132,23 +132,12 @@ pub fn locked<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
         return work();
     }
 
-    let lock = lock_file()?;
+    let lock = config::lock_file("sign-ins.lock")?;
     lock.lock().context("could not lock the sign-ins")?;
     LOCKED.set(true);
     let result = work();
     LOCKED.set(false);
     result
-}
-
-fn lock_file() -> Result<std::fs::File> {
-    let path = config_dir()?.join("sign-ins.lock");
-
-    std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("could not open {}", path.display()))
 }
 
 fn out_of_reach(host: &str, profile: &str) -> anyhow::Error {
@@ -212,5 +201,5 @@ fn save_file(file: &CredentialsFile) -> Result<()> {
 }
 
 fn file_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join("credentials.json"))
+    Ok(config::dir()?.join("credentials.json"))
 }

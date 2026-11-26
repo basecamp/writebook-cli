@@ -3,6 +3,7 @@ use serde_json::json;
 
 use super::{Leaf, client, text};
 use crate::api::{self, Part, PartData};
+use crate::leaf_kind::LeafKind;
 use crate::sync;
 
 /// One page, section or picture, as the page screen shows it.
@@ -18,9 +19,9 @@ pub struct LeafContent {
 
 pub fn leaf(host: &str, book_id: u64, leaf: &Leaf) -> Result<LeafContent> {
     let value = client(host)?.get(&sync::leaf_path(book_id, &leaf.kind, leaf.id))?;
-    let body = match leaf.kind.as_str() {
-        "Picture" => text(&value, "caption"),
-        _ => value["body"].as_str().map(str::to_string),
+    let body = match leaf.kind {
+        LeafKind::Picture => text(&value, "caption"),
+        LeafKind::Page | LeafKind::Section | LeafKind::Unknown(_) => value["body"].as_str().map(str::to_string),
     };
 
     Ok(LeafContent {

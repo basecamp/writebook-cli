@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::api;
 use crate::checkout::Checkout;
 use crate::index::{self, Entry};
+use crate::leaf_kind::LeafKind;
 use crate::merge;
 use crate::plan;
 use crate::sync;
@@ -76,8 +77,8 @@ fn diff_remote() -> Result<()> {
                 let content = sync::fetch_leaf(&mut client, origin.book_id, &leaf.kind, leaf.id)?;
                 let filename = sync::page_filename(&leaf.title, leaf.id);
 
-                match leaf.kind.as_str() {
-                    "Page" => {
+                match &leaf.kind {
+                    LeafKind::Page => {
                         let body = merge::localize_upload_urls(&content.body.unwrap_or_default());
                         print_diff(&filename, "", &body);
                         remote_entries.push(Entry::Page {
@@ -85,7 +86,7 @@ fn diff_remote() -> Result<()> {
                             filename,
                         });
                     }
-                    "Section" => {
+                    LeafKind::Section => {
                         let body = content.body.unwrap_or_default();
                         let filename = if body.is_empty() { None } else { Some(filename) };
 
@@ -99,7 +100,7 @@ fn diff_remote() -> Result<()> {
                             theme: content.theme,
                         });
                     }
-                    "Picture" => {
+                    LeafKind::Picture => {
                         if let Some(image) = &content.image {
                             let filename = sync::picture_filename(image);
                             println!("binary file {filename} added");
@@ -109,7 +110,7 @@ fn diff_remote() -> Result<()> {
                             });
                         }
                     }
-                    _ => {}
+                    LeafKind::Unknown(_) => {}
                 }
             }
             Some(known) => {
@@ -118,16 +119,16 @@ fn diff_remote() -> Result<()> {
                 if known.fingerprint != leaf.fingerprint {
                     let content = sync::fetch_leaf(&mut client, origin.book_id, &leaf.kind, leaf.id)?;
 
-                    match (known.kind.as_str(), &known.filename) {
-                        ("Page", Some(filename)) => {
+                    match (&known.kind, &known.filename) {
+                        (LeafKind::Page, Some(filename)) => {
                             let body = merge::localize_upload_urls(&content.body.clone().unwrap_or_default());
                             print_diff(filename, &checkout.read_base_or_empty(filename)?, &body);
                         }
-                        ("Section", Some(filename)) => {
+                        (LeafKind::Section, Some(filename)) => {
                             let body = content.body.clone().unwrap_or_default();
                             print_diff(filename, &checkout.read_base_or_empty(filename)?, &body);
                         }
-                        ("Picture", Some(filename)) => {
+                        (LeafKind::Picture, Some(filename)) => {
                             if content.image.as_ref().map(|it| &it.checksum) != known.image_remote_checksum.as_ref() {
                                 println!("binary file {filename} changed");
                             }
@@ -166,13 +167,13 @@ fn diff_remote() -> Result<()> {
     Ok(())
 }
 
-fn remote_entry(kind: &str, content: &sync::RemoteLeafContent, filename: Option<String>) -> Option<Entry> {
+fn remote_entry(kind: &LeafKind, content: &sync::RemoteLeafContent, filename: Option<String>) -> Option<Entry> {
     match kind {
-        "Page" => filename.map(|filename| Entry::Page {
+        LeafKind::Page => filename.map(|filename| Entry::Page {
             title: content.title.clone(),
             filename,
         }),
-        "Section" => Some(Entry::Section {
+        LeafKind::Section => Some(Entry::Section {
             title: content.title.clone(),
             filename: if content.body.as_deref().unwrap_or_default().is_empty() {
                 None
@@ -181,11 +182,11 @@ fn remote_entry(kind: &str, content: &sync::RemoteLeafContent, filename: Option<
             },
             theme: content.theme.clone(),
         }),
-        "Picture" => filename.map(|filename| Entry::Picture {
+        LeafKind::Picture => filename.map(|filename| Entry::Picture {
             caption: content.caption.clone().unwrap_or_default(),
             filename,
         }),
-        _ => None,
+        LeafKind::Unknown(_) => None,
     }
 }
 
