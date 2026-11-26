@@ -109,6 +109,38 @@ fn one_command_at_a_time_renews_a_sign_in() {
 }
 
 #[test]
+fn commands_run_side_by_side_share_the_sign_in_folder() {
+    let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
+    let config = tempdir();
+    sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
+    expire_sign_ins(&config);
+
+    let commands: Vec<_> = (0..8)
+        .map(|_| {
+            let config = config.to_path_buf();
+            let url = server.url.clone();
+            std::thread::spawn(move || {
+                (0..3)
+                    .map(|_| {
+                        writebook(
+                            &["book", "list", "--instance", &url],
+                            &[("XDG_CONFIG_HOME", config.to_str().unwrap())],
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+
+    for command in commands {
+        for output in command.join().unwrap() {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(stdout(&output).contains("Ops Handbook"), "{}", stdout(&output));
+        }
+    }
+}
+
+#[test]
 fn says_so_when_the_sign_in_is_in_a_keyring_out_of_reach() {
     let server = fake_writebook(Arc::new(Mutex::new(Vec::new())));
     let config = tempdir();

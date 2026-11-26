@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// In three steps, since icacls given them at once leaves entries behind:
 /// drop any added ones, grant the user, then drop the inherited ones. A path
@@ -14,26 +15,45 @@ use std::sync::OnceLock;
 /// another command reading a file inside it.
 pub fn restrict(path: &Path) -> Result<()> {
     let user = current_user()?;
-    let inheritance = if path.is_dir() { "(OI)(CI)" } else { "" };
-    let only_the_user = format!("{}:{inheritance}(F)", user.name);
+    let (inheritance, ace_inheritance) = if path.is_dir() { ("(OI)(CI)", "OICI") } else { ("", "") };
 
-    if !matches!(entries(path)?.as_slice(), [entry] if entry.eq_ignore_ascii_case(&only_the_user)) {
+    if !is_protected_and_only(path, &format!("A;{ace_inheritance};FA;;;{user}"))? {
         icacls(path, &["/reset"])?;
-        icacls(path, &["/grant:r", &format!("*{}:{inheritance}F", user.sid)])?;
+        icacls(path, &["/grant:r", &format!("*{user}:{inheritance}F")])?;
         icacls(path, &["/inheritance:r"])?;
     }
     Ok(())
 }
 
-fn entries(path: &Path) -> Result<Vec<String>> {
-    let listing = icacls(path, &[])?;
-    let shown = path.display().to_string();
+fn is_protected_and_only(path: &Path, entry: &str) -> Result<bool> {
+    static SAVES: AtomicUsize = AtomicUsize::new(0);
+    let saved = std::env::temp_dir().join(format!(
+        "writebook-acl-{}-{}",
+        std::process::id(),
+        SAVES.fetch_add(1, Ordering::Relaxed)
+    ));
+    icacls(path, &["/save", &saved.display().to_string()])?;
+    let bytes = std::fs::read(&saved).with_context(|| format!("could not read {}", saved.display()));
+    super::remove_if_present(&saved);
 
-    Ok(listing
+    let units: Vec<u16> = bytes?
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let descriptor = String::from_utf16_lossy(&units);
+
+    match descriptor
         .lines()
-        .take_while(|line| !line.trim().is_empty())
-        .map(|line| line.strip_prefix(shown.as_str()).unwrap_or(line).trim().to_string())
-        .collect())
+        .nth(1)
+        .and_then(|line| line.trim().strip_prefix("D:"))
+    {
+        Some(list) => {
+            let flags = &list[..list.find('(').unwrap_or(list.len())];
+            let entries = list[flags.len()..].split("S:").next().unwrap_or_default();
+            Ok(flags.contains('P') && entries == format!("({entry})"))
+        }
+        None => Ok(false),
+    }
 }
 
 fn icacls(path: &Path, args: &[&str]) -> Result<String> {
@@ -51,13 +71,8 @@ fn icacls(path: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
-struct User {
-    name: String,
-    sid: String,
-}
-
-fn current_user() -> Result<&'static User> {
-    static USER: OnceLock<User> = OnceLock::new();
+fn current_user() -> Result<&'static str> {
+    static USER: OnceLock<String> = OnceLock::new();
 
     match USER.get() {
         Some(user) => Ok(user),
@@ -67,14 +82,12 @@ fn current_user() -> Result<&'static User> {
                 .output()
                 .context("could not run whoami")?;
             let line = String::from_utf8_lossy(&output.stdout);
-            let fields: Vec<&str> = line.trim().split(',').map(|it| it.trim_matches('"')).collect();
+            let sid = line.trim().rsplit(',').next().unwrap_or_default().trim_matches('"');
 
-            match fields.as_slice() {
-                [name, sid] if output.status.success() && sid.starts_with("S-") => Ok(USER.get_or_init(|| User {
-                    name: name.to_string(),
-                    sid: sid.to_string(),
-                })),
-                _ => bail!("could not look up the current user"),
+            if output.status.success() && sid.starts_with("S-") {
+                Ok(USER.get_or_init(|| sid.to_string()))
+            } else {
+                bail!("could not look up the current user")
             }
         }
     }
