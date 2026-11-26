@@ -95,14 +95,3 @@ fn file_markdown(name: &str, url: &str, image: bool) -> String {
         format!("[{label}]({url})")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn escapes_brackets_and_backslashes_in_an_uploaded_file_label() {
-        assert_eq!(file_markdown("notes].pdf", "/u/1", false), "[notes\\].pdf](/u/1)");
-        assert_eq!(file_markdown("a\\[b].png", "/u/2", true), "![a\\\\\\[b\\].png](/u/2)");
-    }
-}

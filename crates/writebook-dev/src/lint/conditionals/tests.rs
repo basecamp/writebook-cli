@@ -1,9 +1,9 @@
 use super::*;
+use crate::lint::tree::violations;
 
 #[test]
-fn the_guard_reader_refuses_what_it_should() {
-    let guarded = syn::parse_file(
-        "fn allowed(name: Option<&str>) -> usize {
+fn a_guard_clause_is_only_allowed_as_the_first_statement_of_a_function() {
+    let source = "fn allowed(name: Option<&str>) -> usize {
              let Some(name) = name else { return 0 };
              name.len()
          }
@@ -22,18 +22,13 @@ fn the_guard_reader_refuses_what_it_should() {
          }
          fn valued(name: Option<&str>) -> usize {
              if let Some(name) = name { name.len() } else { 0 }
-         }",
-    )
-    .expect("the example parses");
-    let mut guards = Guards {
-        found: Found::new("a.rs"),
-        body: None,
-    };
-
-    guards.visit_file(&guarded);
+         }";
 
     assert_eq!(
-        vec!["a.rs:7: a guard clause", "a.rs:14: a guard clause"],
-        guards.found.lines
+        violations(
+            &[("src/a.rs", source)],
+            a_guard_clause_is_only_the_first_statement_of_a_function
+        ),
+        ["src/a.rs:7: a guard clause", "src/a.rs:14: a guard clause"]
     );
 }

@@ -9,6 +9,8 @@ mod hygiene;
 mod layout;
 mod parsed;
 mod test_code;
+#[cfg(test)]
+mod tree;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};

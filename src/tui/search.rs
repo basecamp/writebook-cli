@@ -231,20 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn splits_the_snippet_around_the_marked_words() {
-        assert_eq!(
-            marked("Follow the  white rabbit. <mark>Everything</mark> here is <mark>plain</mark> &amp; simple"),
-            [
-                ("Follow the white rabbit. ".to_string(), false),
-                ("Everything".to_string(), true),
-                (" here is ".to_string(), false),
-                ("plain".to_string(), true),
-                (" & simple".to_string(), false),
-            ]
-        );
-    }
-
-    #[test]
     fn enter_searches_for_new_words_and_opens_a_result_for_the_same_ones() {
         let mut search = Search::new(Some(2), "The Trail Guide".to_string());
 
@@ -265,40 +251,5 @@ mod tests {
         search.key(press(KeyCode::Char('s')));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbits"));
         assert!(matches!(search.key(press(KeyCode::Esc)), Action::Close));
-    }
-
-    #[test]
-    fn drops_results_for_words_searched_before_and_keeps_the_selection_on_a_result() {
-        let mut search = Search::new(Some(2), "The Trail Guide".to_string());
-        search.query = "rabbit".to_string();
-        search.key(press(KeyCode::Enter));
-        search.arrived(
-            "rabbit",
-            Ok(vec![found("Introduction"), found("Getting Around"), found("Maps")]),
-        );
-        search.key(press(KeyCode::Down));
-        search.key(press(KeyCode::Down));
-
-        search.query = "hole".to_string();
-        search.key(press(KeyCode::Enter));
-        search.arrived("rabbit", Ok(vec![found("Introduction")]));
-        assert!(matches!(search.results, Some(Loading::Pending)));
-
-        search.arrived("hole", Ok(vec![found("Down the hole")]));
-        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Open(found) if found.title == "Down the hole"));
-    }
-
-    #[test]
-    fn enter_searches_again_after_a_search_fails() {
-        let mut search = Search::new(None, "every book".to_string());
-        search.query = "rabbit".to_string();
-        search.key(press(KeyCode::Enter));
-        assert!(
-            matches!(search.key(press(KeyCode::Enter)), Action::Nothing),
-            "still searching"
-        );
-
-        search.arrived("rabbit", Err(anyhow::anyhow!("offline")));
-        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbit"));
     }
 }

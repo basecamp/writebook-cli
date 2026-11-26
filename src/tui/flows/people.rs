@@ -412,3 +412,71 @@ fn a_wrong_current_password_shows_the_servers_reason_and_keeps_the_form() {
     tui.ctrl('s');
     tui.wait_for("Saved.");
 }
+
+#[test]
+fn rows_line_up_with_wide_names_and_the_selection_stays_on_someone_when_the_list_shrinks() {
+    let (mut tui, state) = workplace(true);
+    {
+        let mut state = state.lock().unwrap();
+        state.people.push((4, "山田太郎", "member".to_string()));
+        for id in 5..=40 {
+            let name: &'static str = Box::leak(format!("Person {id}").into_boxed_str());
+            state.people.push((id, name, "member".to_string()));
+        }
+    }
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Handbook");
+    tui.press(KeyCode::Char('s'));
+    let screen = tui.wait_for("Kevin");
+    assert_eq!(
+        row(&screen, "山").chars().count(),
+        row(&screen, "Kevin").chars().count(),
+        "{screen}"
+    );
+
+    for _ in 0..39 {
+        tui.press(KeyCode::Down);
+    }
+    let screen = tui.screen();
+    assert!(row(&screen, "Person 40").starts_with("›"), "{screen}");
+
+    tui.press(KeyCode::Char('d'));
+    tui.wait_for("Remove Person 40?");
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Enter);
+    let screen = tui.wait_for_gone("Person 40");
+    assert!(row(&screen, "Person 39").starts_with("›"), "{screen}");
+}
+
+#[test]
+fn enter_moves_on_through_the_profile_and_saves_from_the_button() {
+    let (mut tui, _) = settings(true);
+
+    tui.press(KeyCode::Enter);
+    tui.wait_for("books > Settings > Me");
+    for _ in 0..3 {
+        tui.press(KeyCode::Enter);
+    }
+    assert!(!tui.paths().iter().any(|it| it.starts_with("PATCH")));
+
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Saved.");
+    assert_eq!(tui.paths().iter().filter(|it| it.starts_with("PATCH")).count(), 1);
+}
+
+#[test]
+fn tab_moves_through_the_profile_and_only_ctrl_i_opens_the_instances() {
+    let (mut tui, _) = settings(true);
+
+    tui.press(KeyCode::Enter);
+    tui.wait_for("books > Settings > Me");
+    tui.press(KeyCode::Tab);
+    tui.press(KeyCode::Char('!'));
+    let screen = tui.screen();
+    assert!(screen.contains("me@example.com!"), "{screen}");
+    assert!(!screen.contains("esc close"), "{screen}");
+
+    tui.ctrl('i');
+    let screen = tui.screen();
+    assert!(screen.contains("esc close"), "{screen}");
+}

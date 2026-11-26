@@ -164,26 +164,3 @@ impl Publishing {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn edits_only_the_slug_of_the_public_address() {
-        let publishing = Publishing {
-            id: 1,
-            book_page_id: 2,
-            host: "https://books.example.com".to_string(),
-            book_id: 2,
-            published: true,
-            slug: "guide".to_string(),
-            url: "https://books.example.com/2/guide".to_string(),
-            editing_slug: None,
-            showing_qr: false,
-            saving: false,
-        };
-
-        assert_eq!(publishing.url_without_slug(), "https://books.example.com/2/");
-    }
-}

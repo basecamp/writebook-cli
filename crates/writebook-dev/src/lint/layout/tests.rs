@@ -1,9 +1,7 @@
 use super::*;
+use crate::lint::tree::violations;
 
-#[test]
-fn the_layout_readers_refuse_what_they_should() {
-    let laid_out = syn::parse_file(
-        "use std::fmt;
+const LAID_OUT: &str = "use std::fmt;
          const FIRST: u8 = 1;
          struct Posting;
          impl fmt::Debug for Posting {
@@ -15,32 +13,31 @@ fn the_layout_readers_refuse_what_they_should() {
              fn private(&self) {}
              pub fn late(&self) {}
          }
-         const LATE: u8 = 2;",
-    )
-    .expect("the example parses");
-    let mut constants = Modules {
-        found: Found::new("a.rs"),
-        check: constants_after_code,
-    };
-    let mut impls = Impls {
-        found: Found::new("a.rs"),
-    };
-    let mut traits = Modules {
-        found: Found::new("a.rs"),
-        check: trait_impls_before_the_inherent_one,
-    };
+         const LATE: u8 = 2;";
 
-    constants.visit_file(&laid_out);
-    impls.visit_file(&laid_out);
-    traits.visit_file(&laid_out);
-
-    assert_eq!(vec!["a.rs:13: LATE after code"], constants.found.lines);
+#[test]
+fn constants_after_other_code_are_refused() {
     assert_eq!(
-        vec!["a.rs:9: new out of order", "a.rs:11: late out of order"],
-        impls.found.lines
+        violations(&[("src/a.rs", LAID_OUT)], constants_come_before_any_other_code),
+        ["src/a.rs:13: LATE after code"]
     );
+}
+
+#[test]
+fn an_impls_functions_out_of_order_are_refused() {
     assert_eq!(
-        vec!["a.rs:4: Posting's trait impl before its inherent impl"],
-        traits.found.lines
+        violations(
+            &[("src/a.rs", LAID_OUT)],
+            an_impl_starts_with_new_then_associated_functions_then_public_then_private_methods
+        ),
+        ["src/a.rs:9: new out of order", "src/a.rs:11: late out of order"]
+    );
+}
+
+#[test]
+fn a_trait_impl_before_the_inherent_impl_is_refused() {
+    assert_eq!(
+        violations(&[("src/a.rs", LAID_OUT)], trait_impls_come_after_the_inherent_impl),
+        ["src/a.rs:4: Posting's trait impl before its inherent impl"]
     );
 }

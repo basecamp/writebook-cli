@@ -97,6 +97,16 @@ fn creates_a_book_from_the_form_and_opens_it() {
     let screen = tui.wait_for("Subtitle");
     assert!(screen.contains("books > Books > New book"), "{screen}");
 
+    tui.press(KeyCode::Up);
+    tui.press(KeyCode::Up);
+    let screen = tui.screen();
+    assert!(
+        !screen.contains("delete book"),
+        "a new book has nothing to delete:\n{screen}"
+    );
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Down);
+
     tui.type_text("Field Guide");
     tui.press(KeyCode::Tab);
     tui.type_text("Birds nearby");
@@ -223,6 +233,79 @@ fn edits_a_book_and_sends_the_changed_fields_and_access() {
     assert_eq!(tui.paths()[3..], ["PATCH /books/1.json", "GET /books/1/manifest.json"]);
 }
 
+fn access_row(screen: &str, name: &str) -> String {
+    screen
+        .lines()
+        .find(|it| it.contains(&format!("{name} .")))
+        .unwrap_or_else(|| panic!("no row for {name}:\n{screen}"))
+        .to_string()
+}
+
+#[test]
+fn cycles_the_theme_round_and_changes_access_only_where_it_can_change() {
+    let mut tui = library(|request, _| match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/books/1/edit.json") => Some(json(json!({
+            "book": { "id": 1, "title": "Handbook", "theme": "white", "everyone_access": false },
+            "users": [
+                { "id": 5, "name": "Ana", "role": "reader" },
+                { "id": 6, "name": "Bo", "role": "none" },
+                { "id": 7, "name": "Cy", "role": "editor", "can_administer": true },
+                { "id": 8, "name": "Di", "role": "reader", "current": true }
+            ]
+        }))),
+        ("PATCH", "/books/1.json") => Some(reply(204, "")),
+        _ => None,
+    });
+    open_edit_form(&mut tui);
+
+    for _ in 0..3 {
+        tui.press(KeyCode::Tab);
+    }
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Tab);
+    tui.press(KeyCode::Tab);
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Tab);
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Tab);
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Tab);
+    tui.press(KeyCode::Right);
+    let screen = tui.screen();
+    assert!(access_row(&screen, "Ana").contains("can edit"), "{screen}");
+    assert!(access_row(&screen, "Bo").contains("no access"), "{screen}");
+    assert!(access_row(&screen, "♛ Cy").contains("can edit"), "{screen}");
+    assert!(access_row(&screen, "Di").contains("can read"), "{screen}");
+
+    for _ in 0..4 {
+        tui.press(KeyCode::Up);
+    }
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Left);
+    tui.press(KeyCode::Down);
+    let screen = tui.screen();
+    assert!(access_row(&screen, "Everyone").contains("on"), "{screen}");
+    assert!(access_row(&screen, "Ana").contains("can read"), "{screen}");
+    assert!(access_row(&screen, "Bo").contains("can read"), "{screen}");
+
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Right);
+    tui.ctrl('s');
+    let request = tui.wait_for_request("PATCH", "/books/1.json");
+    assert!(has_part(&request, "book[theme]", "violet"), "{}", request.body);
+    assert!(has_part(&request, "book[everyone_access]", "true"), "{}", request.body);
+    assert!(has_part(&request, "editor_ids[]", "6"), "{}", request.body);
+    assert!(has_part(&request, "editor_ids[]", "7"), "{}", request.body);
+    assert!(!has_part(&request, "editor_ids[]", "5"), "{}", request.body);
+    assert!(has_part(&request, "reader_ids[]", "5"), "{}", request.body);
+}
+
 #[test]
 fn a_blank_title_or_server_error_keeps_the_edit_form_and_esc_leaves_without_saving() {
     let mut tui = library(|request, _| match (request.method.as_str(), request.path.as_str()) {
@@ -319,6 +402,87 @@ fn picks_a_cover_with_the_file_picker_and_uploads_it_with_the_book() {
     );
     assert!(request.body.contains("\r\n\r\nimage bytes\r\n"), "{}", request.body);
     assert!(!request.body.contains("remove_cover"), "{}", request.body);
+}
+
+fn names_listed(screen: &str, names: &[&str]) -> Vec<String> {
+    screen
+        .lines()
+        .skip_while(|line| !line.contains("Find:"))
+        .filter_map(|line| {
+            names
+                .iter()
+                .find(|name| line.contains(**name))
+                .map(|name| name.to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn the_file_picker_lists_folders_first_narrows_as_you_type_and_moves_between_folders() {
+    let folder = TempDir::new();
+    std::fs::create_dir_all(folder.join("Photos")).unwrap();
+    std::fs::create_dir_all(folder.join(".hidden")).unwrap();
+    for name in ["cover.png", "notes.txt", "Banner.JPG", "Photos/cat.webp"] {
+        std::fs::write(folder.join(name), "image bytes").unwrap();
+    }
+    let all = ["Photos", ".hidden", "Banner.JPG", "cover.png", "notes.txt", "cat.webp"];
+    let mut tui = library(|request, _| match (request.method.as_str(), request.path.as_str()) {
+        ("PATCH", "/books/1.json") => Some(reply(204, "")),
+        _ => None,
+    });
+    tui.app.files_dir = folder.to_path_buf();
+
+    open_edit_form(&mut tui);
+    tui.press(KeyCode::Up);
+    tui.press(KeyCode::Enter);
+    let screen = tui.screen();
+    assert_eq!(
+        names_listed(&screen, &all),
+        ["Photos", "Banner.JPG", "cover.png"],
+        "{screen}"
+    );
+
+    tui.type_text("Co");
+    let screen = tui.screen();
+    assert_eq!(names_listed(&screen, &all), ["cover.png"], "{screen}");
+
+    tui.press(KeyCode::Esc);
+    tui.type_text(".");
+    let screen = tui.screen();
+    assert_eq!(
+        names_listed(&screen, &all),
+        [".hidden", "Banner.JPG", "cover.png"],
+        "{screen}"
+    );
+    tui.press(KeyCode::Esc);
+
+    tui.press(KeyCode::Enter);
+    let screen = tui.screen();
+    assert_eq!(names_listed(&screen, &all), ["cat.webp"], "{screen}");
+    assert!(screen.contains("Photos"), "{screen}");
+
+    tui.press(KeyCode::Backspace);
+    let screen = tui.screen();
+    assert_eq!(
+        names_listed(&screen, &all),
+        ["Photos", "Banner.JPG", "cover.png"],
+        "{screen}"
+    );
+
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Enter);
+    let screen = tui.screen();
+    assert!(!screen.contains("Choose a cover"), "{screen}");
+    assert!(screen.contains("New: cover.png"), "{screen}");
+
+    tui.ctrl('s');
+    let request = tui.wait_for_request("PATCH", "/books/1.json");
+    assert!(
+        request.body.contains("name=\"book[cover]\"; filename=\"cover.png\""),
+        "{}",
+        request.body
+    );
 }
 
 #[test]
@@ -599,6 +763,8 @@ fn publishes_changes_the_address_copies_it_and_unpublishes() {
     assert!(screen.contains(&format!("Copied {address}")), "{screen}");
 
     tui.press(KeyCode::Char('e'));
+    let screen = tui.screen();
+    assert!(screen.contains(&format!("{}/1/handbook▏", tui.server.url)), "{screen}");
     for _ in 0.."handbook".len() {
         tui.press(KeyCode::Backspace);
     }

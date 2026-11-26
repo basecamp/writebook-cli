@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::{client, expand_home, text};
+use super::{client, text};
 use crate::api::{Part, PartData};
 
 /// Everything on a book's edit screen, which is also the new-book screen.
@@ -74,8 +74,7 @@ pub fn save_book(host: &str, form: &BookForm) -> Result<u64> {
     let everyone = form.everyone.to_string();
     let cover = match &form.new_cover {
         Some(path) => {
-            let path = expand_home(path);
-            let bytes = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
+            let bytes = std::fs::read(path).with_context(|| format!("could not read {path}"))?;
             let filename = std::path::Path::new(&path)
                 .file_name()
                 .and_then(|it| it.to_str())

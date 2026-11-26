@@ -126,7 +126,7 @@ fn moves_between_the_title_and_the_body() {
 
     editor.key(press(KeyCode::Up));
     editor.key(press(KeyCode::Char('e')));
-    assert_eq!(editor.title, "Title");
+    assert!(shown(&mut editor).contains("Title"), "{}", shown(&mut editor));
 
     editor.key(press(KeyCode::Enter));
     editor.key(press(KeyCode::Char('!')));
@@ -152,6 +152,10 @@ fn drawn(editor: &mut Editor) -> ratatui::Terminal<ratatui::backend::TestBackend
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(14, 10)).unwrap();
     terminal.draw(|frame| editor.draw(frame, frame.area())).unwrap();
     terminal
+}
+
+fn shown(editor: &mut Editor) -> String {
+    views::screen_text(&drawn(editor)).join("\n")
 }
 
 #[test]
@@ -220,5 +224,5 @@ fn pastes_text_as_it_is_without_starting_list_items() {
 
     editor.key(press(KeyCode::Tab));
     editor.paste("A\ntitle\n");
-    assert_eq!(editor.title, "A title");
+    assert!(shown(&mut editor).contains("A title"), "{}", shown(&mut editor));
 }

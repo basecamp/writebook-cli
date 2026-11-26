@@ -1,29 +1,41 @@
 use super::*;
+use crate::lint::tree::violations;
 
 #[test]
-fn the_comment_reader_refuses_what_it_should() {
-    for (line, refused) in [
-        ("// ----------------", Some("banner")),
-        ("    // ==== Postings ====", Some("banner")),
-        ("// TODO: drop this", Some("marker")),
-        ("/// For now this keeps the old order", None),
-        ("// let seen = posting.seen;", Some("code")),
-        ("    // }", Some("code")),
-        ("// fn old() {", Some("code")),
-        ("// The vendor's API sends a 202 for a refusal.", None),
-        ("/// ```", None),
-        ("/// let seen = posting.seen;", None),
-        ("let url = \"https://example.com\"; // TODO", None),
-        ("//! The postings.", None),
-        ("//! - **Verified.** Every fact told is read back", None),
-        ("/// goes by that name -- the grammar's --", None),
-    ] {
-        assert_eq!(refused_comment(line), refused, "{line}");
-    }
+fn a_comment_that_is_a_banner_a_marker_or_code_is_refused() {
+    let source = [
+        "// ----------------",
+        "    // ==== Postings ====",
+        "// TODO: drop this",
+        "/// For now this keeps the old order",
+        "// let seen = posting.seen;",
+        "    // }",
+        "// fn old() {",
+        "// The vendor's API sends a 202 for a refusal.",
+        "/// ```",
+        "/// let seen = posting.seen;",
+        "let url = \"https://example.com\"; // TODO",
+        "//! The postings.",
+        "//! - **Verified.** Every fact told is read back",
+        "/// goes by that name -- the grammar's --",
+    ]
+    .join("\n");
+
+    assert_eq!(
+        violations(&[("src/a.rs", &source)], no_comment_is_a_banner_a_marker_or_code),
+        [
+            "src/a.rs:1: banner: // ----------------",
+            "src/a.rs:2: banner: // ==== Postings ====",
+            "src/a.rs:3: marker: // TODO: drop this",
+            "src/a.rs:5: code: // let seen = posting.seen;",
+            "src/a.rs:6: code: // }",
+            "src/a.rs:7: code: // fn old() {",
+        ]
+    );
 }
 
 #[test]
-fn the_test_comment_reader_refuses_what_it_should() {
+fn a_comment_inside_a_test_is_refused() {
     let source = [
         "fn helper() {",
         "    // fine outside a test",
@@ -43,12 +55,15 @@ fn the_test_comment_reader_refuses_what_it_should() {
         "}",
     ]
     .join("\n");
-    let file = syn::parse_str::<syn::File>(&source).expect("the source parses");
-    assert_eq!(test_comment_lines(&file, &source), [7, 14]);
+
+    assert_eq!(
+        violations(&[("src/a.rs", &source)], no_test_holds_a_comment),
+        ["src/a.rs:7: // refused", "src/a.rs:14: // refused"]
+    );
 }
 
 #[test]
-fn the_test_doc_reader_refuses_what_it_should() {
+fn a_doc_comment_on_a_test_must_link_something() {
     let source = [
         "/// Holds https://example.com/issues/1",
         "#[test]",
@@ -62,12 +77,15 @@ fn the_test_doc_reader_refuses_what_it_should() {
         "fn helper() {}",
     ]
     .join("\n");
-    let file = syn::parse_str::<syn::File>(&source).expect("the source parses");
-    assert_eq!(unlinked_test_docs(&file), [4]);
+
+    assert_eq!(
+        violations(&[("src/a.rs", &source)], no_test_is_documented_without_a_link),
+        ["src/a.rs:4"]
+    );
 }
 
 #[test]
-fn the_private_doc_reader_refuses_what_it_should() {
+fn a_doc_comment_on_a_private_item_is_refused() {
     let source = [
         "//! Module docs.",
         "/// Doc.",
@@ -96,24 +114,36 @@ fn the_private_doc_reader_refuses_what_it_should() {
         "}",
     ]
     .join("\n");
-    let file = syn::parse_str::<syn::File>(&source).expect("the source parses");
-    assert_eq!(private_docs(&file), [2, 9, 15]);
+
+    assert_eq!(
+        violations(&[("src/a.rs", &source)], no_private_item_is_documented),
+        ["src/a.rs:2", "src/a.rs:9", "src/a.rs:15"]
+    );
 }
 
 #[test]
-fn the_history_reader_refuses_what_it_should() {
-    for (line, refused) in [
-        ("// for now this keeps the old order", true),
-        ("/// Previously a Vec", true),
-        ("// it used to retry", true),
-        ("//! A Temporary table", true),
-        ("// a workaround for the driver", true),
-        ("// no workarounds here", false),
-        ("// the temporal order", false),
-        ("// reused to the end", false),
-        ("let x = 1; // for now", false),
-    ] {
-        let found = comment_text(line).is_some_and(|text| tells_history_or_excuses(text).is_some());
-        assert_eq!(found, refused, "{line}");
-    }
+fn a_comment_that_tells_history_or_makes_an_excuse_is_refused() {
+    let source = [
+        "// for now this keeps the old order",
+        "/// Previously a Vec",
+        "// it used to retry",
+        "//! A Temporary table",
+        "// a workaround for the driver",
+        "// no workarounds here",
+        "// the temporal order",
+        "// reused to the end",
+        "let x = 1; // for now",
+    ]
+    .join("\n");
+
+    assert_eq!(
+        violations(&[("src/a.rs", &source)], no_comment_tells_history_or_makes_an_excuse),
+        [
+            "src/a.rs:1: history or an excuse: // for now this keeps the old order",
+            "src/a.rs:2: history or an excuse: /// Previously a Vec",
+            "src/a.rs:3: history or an excuse: // it used to retry",
+            "src/a.rs:4: history or an excuse: //! A Temporary table",
+            "src/a.rs:5: history or an excuse: // a workaround for the driver",
+        ]
+    );
 }

@@ -301,6 +301,40 @@ fn uploads_a_file_into_the_page_at_the_cursor_and_saves_the_link() {
 }
 
 #[test]
+fn escapes_brackets_and_backslashes_in_the_label_of_an_uploaded_file() {
+    let mut tui = handbook(Save::Works);
+    let folder = TempDir::new();
+    std::fs::write(folder.join("a\\[b].png"), "image bytes").unwrap();
+    std::fs::write(folder.join("notes].pdf"), "the notes").unwrap();
+    tui.app.files_dir = folder.to_path_buf();
+    open_welcome(&mut tui);
+
+    start_editing(&mut tui);
+    tui.ctrl('u');
+    tui.wait_for("notes].pdf");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("![a\\\\\\[b\\].png](https://example.com/rails/notes.txt)");
+
+    tui.ctrl('u');
+    tui.wait_for("notes].pdf");
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Enter);
+    tui.wait_for("[notes\\].pdf](https://example.com/rails/notes.txt)");
+
+    tui.ctrl('s');
+    let request = tui.wait_for_request("PATCH", "/books/1/pages/11.json");
+    let saved = body(&request)["page"]["body"].as_str().unwrap().to_string();
+    assert!(
+        saved.contains("![a\\\\\\[b\\].png](https://example.com/rails/notes.txt)"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains("[notes\\].pdf](https://example.com/rails/notes.txt)"),
+        "{saved}"
+    );
+}
+
+#[test]
 fn saving_waits_for_an_upload_in_flight() {
     let mut tui = handbook(Save::Works);
     let folder = TempDir::new();

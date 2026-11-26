@@ -110,12 +110,15 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_decode_an_image_too_big_to_show() {
-        let mut png = Vec::new();
-        image::DynamicImage::new_luma8(IMAGE_SIDE + 1, 1)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
+    fn reads_an_image_file_unless_it_is_too_big_to_show() {
+        let folder = crate::scratch::TempDir::new();
+        let write = |name: &str, width: u32| {
+            let path = folder.join(name);
+            image::DynamicImage::new_luma8(width, 1).save(&path).unwrap();
+            path
+        };
 
-        assert!(decode(image::ImageReader::new(std::io::Cursor::new(png))).is_err());
+        assert_eq!(image_file(&write("small.png", 4)).unwrap().width(), 4);
+        assert!(image_file(&write("wide.png", 20_000)).is_err());
     }
 }

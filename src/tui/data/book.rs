@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{File, client, expand_home, text};
+use super::{File, client, text};
 use crate::api::{Part, PartData};
 use crate::leaf_kind::LeafKind;
 use crate::{creds, sync};
@@ -91,8 +91,7 @@ pub fn add(host: &str, book_id: u64, leaf: &NewLeaf) -> Result<()> {
             )?;
         }
         NewLeaf::Picture { caption, path } => {
-            let path = expand_home(path);
-            let bytes = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
+            let bytes = std::fs::read(path).with_context(|| format!("could not read {path}"))?;
             let filename = std::path::Path::new(&path)
                 .file_name()
                 .and_then(|it| it.to_str())

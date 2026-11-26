@@ -1,18 +1,31 @@
 use super::*;
+use crate::lint::tree::in_tree;
 
 #[test]
 fn a_file_a_test_module_declares_is_test_code() {
-    assert_eq!("src/tui", module_directory("src/tui.rs"));
-    assert_eq!("src", module_directory("src/main.rs"));
-    assert!(declares("src/tui/flows", "src/tui/flows.rs"));
-    assert!(declares("src/tui/flows", "src/tui/flows/people.rs"));
-    assert!(!declares("src/tui/flows", "src/tui/flowsheet.rs"));
+    let _tree = in_tree(&[
+        ("src/main.rs", "#[cfg(test)]\nmod support;\nmod tui;\n"),
+        ("src/support.rs", "fn a() {}\n"),
+        ("src/tui.rs", "#[cfg(test)]\nmod flows;\n"),
+        ("src/tui/flows.rs", "fn a() {}\n"),
+        ("src/tui/flows/people.rs", "fn a() {}\n"),
+        ("src/tui/flowsheet.rs", "fn a() {}\n"),
+    ]);
+
+    assert!(is_declared_by_a_test_module("src/support.rs"));
+    assert!(is_declared_by_a_test_module("src/tui/flows.rs"));
+    assert!(is_declared_by_a_test_module("src/tui/flows/people.rs"));
+    assert!(!is_declared_by_a_test_module("src/tui/flowsheet.rs"));
+    assert!(!is_declared_by_a_test_module("src/tui.rs"));
 }
 
 #[test]
-fn production_leaves_out_the_tests_module() {
-    let file = syn::parse_file("fn a() {}\n#[cfg(test)]\nmod tests { fn b() {} }").expect("the example parses");
+fn a_source_splits_into_production_and_tests() {
+    let _tree = in_tree(&[("src/a.rs", "fn a() {}\n#[cfg(test)]\nmod tests { fn b() {} }\n")]);
 
-    assert_eq!(1, without_tests(&file.items).len());
-    assert_eq!(1, tests_among(&file.items).len());
+    let sources = sources();
+
+    assert_eq!(1, sources.len());
+    assert_eq!(1, sources[0].production().len());
+    assert_eq!(1, sources[0].tests().len());
 }

@@ -230,22 +230,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prints_documents_as_markdown_with_front_matter() {
-        let document = Document {
-            title: "On \"call\"".to_string(),
-            author: None,
-            url: "https://x/4/b/12/p".to_string(),
-            markdown: "# Hello".to_string(),
-            source: Source::Export,
-        };
-
-        assert_eq!(
-            as_markdown(&document),
-            "---\ntitle: \"On \\\"call\\\"\"\nurl: \"https://x/4/b/12/p\"\n---\n\n# Hello\n"
-        );
-    }
-
-    #[test]
     fn splits_front_matter() {
         let (fields, body) =
             split_front_matter("---\ntitle: \"On &amp; off call\"\nurl: \"http://x/4/b/12/p\"\n---\n\n# Hello\n");

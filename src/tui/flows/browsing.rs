@@ -1,5 +1,8 @@
 use crossterm::event::KeyCode;
+use ratatui::style::Color;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use super::{Instance, Loading, Tui, json, not_found, reply};
@@ -655,4 +658,307 @@ fn a_read_only_token_offers_no_new_book() {
     let screen = tui.screen();
     assert!(!screen.contains("New book"), "{screen}");
     assert_eq!(tui.paths(), ["GET /books.json"]);
+}
+
+#[test]
+fn a_search_answered_after_newer_words_were_searched_is_dropped_and_marks_are_plain_text() {
+    let first_asked = Arc::new(AtomicBool::new(false));
+    let newer_searched = Arc::new(AtomicBool::new(false));
+    let mut tui = Tui::new({
+        let first_asked = first_asked.clone();
+        let newer_searched = newer_searched.clone();
+        move |request| match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/books.json") => json(json!([{ "id": 1, "title": "Handbook", "editable": true }])),
+            ("GET", "/search.json?q=rabbit") => {
+                first_asked.store(true, Ordering::SeqCst);
+                while !newer_searched.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                json(json!({ "results": [
+                    { "title": "Introduction", "url": "https://books.example.com/1/handbook/11/introduction", "snippet": "rabbit", "book": { "title": "Handbook" } }
+                ] }))
+            }
+            ("GET", "/search.json?q=hole") => {
+                newer_searched.store(true, Ordering::SeqCst);
+                json(json!({ "results": [
+                    { "title": "Down the hole", "url": "https://books.example.com/1/handbook/12/down", "snippet": "plain", "marked_snippet": "Follow the  white rabbit. <mark>All</mark> is <mark>plain</mark> &amp; simple", "book": { "title": "Handbook" } }
+                ] }))
+            }
+            _ => not_found(),
+        }
+    });
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Handbook");
+
+    tui.press(KeyCode::Char('/'));
+    tui.type_text("rabbit");
+    tui.press(KeyCode::Enter);
+    while !first_asked.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+    for _ in 0.."rabbit".len() {
+        tui.press(KeyCode::Backspace);
+    }
+    tui.type_text("hole");
+    tui.press(KeyCode::Enter);
+
+    let screen = tui.wait_for("Down the hole: Follow the white rabbit. All is plain & simple");
+    tui.settle();
+    let screen = format!("{screen}\n{}", tui.screen());
+    assert!(!screen.contains("Introduction"), "{screen}");
+    assert!(!screen.contains("<mark>"), "{screen}");
+}
+
+#[test]
+fn draws_book_cards_in_their_theme_lists_pages_with_word_counts_and_keeps_the_selection_after_a_reload() {
+    let reloaded = Arc::new(AtomicBool::new(false));
+    let mut tui = Tui::new({
+        let reloaded = reloaded.clone();
+        move |request| match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/books.json") if reloaded.load(Ordering::SeqCst) => json(json!([
+                { "id": 1, "title": "Handbook", "author": "Ops", "editable": true }
+            ])),
+            ("GET", "/books.json") => json(json!([
+                { "id": 1, "title": "Handbook", "subtitle": "How we work", "author": "Ops", "theme": "green", "editable": true },
+                { "id": 2, "title": "Guide", "author": "Ops", "editable": true }
+            ])),
+            ("GET", "/books/1/manifest.json") => json(json!({
+                "book": { "title": "Handbook", "slug": "handbook", "published": false, "editable": true },
+                "leaves": [
+                    { "id": 10, "type": "Section", "title": "Part one" },
+                    { "id": 11, "type": "Page", "title": "On call", "word_count": 1234 },
+                    { "id": 12, "type": "Page", "title": "", "word_count": 1 }
+                ]
+            })),
+            ("GET", "/books/2/manifest.json") => json(json!({
+                "book": { "title": "Guide", "slug": "guide", "published": false, "editable": true },
+                "leaves": []
+            })),
+            _ => not_found(),
+        }
+    });
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Guide");
+
+    let screen = tui.screen();
+    let titles = screen
+        .lines()
+        .enumerate()
+        .filter(|(_, it)| it.contains("Handbook") && it.contains("Guide"))
+        .map(|(index, _)| index)
+        .last()
+        .unwrap_or_else(|| panic!("no row of titles:\n{screen}"));
+    let line = screen.lines().nth(titles).unwrap();
+    let (handbook, guide) = (line.find("Handbook").unwrap(), line.find("Guide").unwrap());
+    let colors = |tui: &Tui, column: usize, row: usize| tui.terminal.backend().buffer()[(column as u16, row as u16)].fg;
+    assert_eq!(
+        screen.matches('╭').count(),
+        1,
+        "only the selected book has a frame:\n{screen}"
+    );
+    assert_eq!(colors(&tui, handbook, titles), Color::Green, "{screen}");
+    assert_eq!(colors(&tui, handbook, titles + 2), Color::Green, "{screen}");
+    assert_eq!(colors(&tui, guide, titles), Color::Reset, "{screen}");
+
+    tui.press(KeyCode::Char('v'));
+    let screen = tui.screen();
+    assert!(
+        row(&screen, "Handbook").starts_with("› Handbook  How we work · Ops ....."),
+        "{screen}"
+    );
+    assert!(row(&screen, "Guide").starts_with("Guide  Ops ....."), "{screen}");
+    assert!(row(&screen, "Handbook").ends_with("....."), "{screen}");
+
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Enter);
+    tui.wait_for("This book has no pages yet.");
+    reloaded.store(true, Ordering::SeqCst);
+    tui.press(KeyCode::Esc);
+    let screen = tui.wait_for_gone("Guide");
+    assert!(row(&screen, "Handbook").starts_with("› Handbook"), "{screen}");
+
+    tui.press(KeyCode::Enter);
+    tui.wait_for("On call");
+    tui.press(KeyCode::Char('v'));
+    let screen = tui.screen();
+    assert!(row(&screen, "Part one").ends_with("....."), "{screen}");
+    assert!(row(&screen, "On call").ends_with("1,234 words"), "{screen}");
+    assert!(row(&screen, "Untitled page").ends_with("1 word"), "{screen}");
+}
+
+fn row(screen: &str, text: &str) -> String {
+    screen
+        .lines()
+        .find(|it| it.contains(text))
+        .unwrap_or_else(|| panic!("no row with {text}:\n{screen}"))
+        .trim()
+        .to_string()
+}
+
+fn long_book() -> Tui {
+    let pages: Vec<_> = (1..=40)
+        .map(|id| json!({ "id": id, "type": "Page", "title": format!("Page {id}"), "word_count": 3 }))
+        .chain([
+            json!({ "id": 41, "type": "Page", "title": "Diagram", "word_count": 1 }),
+            json!({ "id": 42, "type": "Page", "title": "Tour", "word_count": 5 }),
+            json!({ "id": 43, "type": "Section", "title": "Handbook intro" }),
+        ])
+        .collect();
+    let section = "Part one of the handbook covers everything about being on call. ".repeat(40);
+
+    Tui::new(move |request| match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/books.json") => json(json!([{ "id": 1, "title": "Handbook", "editable": true }])),
+        ("GET", "/books/1/manifest.json") => json(json!({
+            "book": { "title": "Handbook", "slug": "handbook", "published": false, "editable": true },
+            "leaves": pages
+        })),
+        ("GET", "/books/1/pages/41.json") => {
+            json(json!({ "title": "Diagram", "body": "![Diagram](/u/diagram.png)", "fingerprint": "f41" }))
+        }
+        ("GET", "/books/1/pages/42.json") => json(json!({
+            "title": "Tour",
+            "body": "First\n\n![Diagram](/u/diagram.png)\n\nLast line",
+            "fingerprint": "f42"
+        })),
+        ("GET", "/books/1/sections/43.json") => {
+            json(json!({ "title": "Handbook intro", "body": section, "fingerprint": "f43" }))
+        }
+        ("GET", path) if path.starts_with("/books/1/pages/") => {
+            json(json!({ "title": "A page", "body": "Text.", "fingerprint": "f" }))
+        }
+        _ => not_found(),
+    })
+}
+
+fn go_to_page(tui: &mut Tui, downs: usize) {
+    tui.press(KeyCode::Tab);
+    for _ in 0..downs {
+        tui.press(KeyCode::Down);
+    }
+    tui.press(KeyCode::Enter);
+}
+
+#[test]
+fn the_index_follows_the_selection_and_pages_with_pictures_and_long_sections_read_to_the_end() {
+    let mut tui = long_book();
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Handbook");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Page 1");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Text.");
+
+    tui.press(KeyCode::Tab);
+    for _ in 0..39 {
+        tui.press(KeyCode::Down);
+    }
+    let screen = tui.screen();
+    assert!(screen.contains("› Page 40"), "{screen}");
+    tui.press(KeyCode::Esc);
+
+    tui.resize(100, 16);
+    go_to_page(&mut tui, 40);
+    let screen = tui.wait_for("Loading the picture…");
+    assert!(screen.contains("41 of 43"), "{screen}");
+
+    tui.press(KeyCode::Right);
+    tui.wait_for("First");
+    for _ in 0..4 {
+        tui.press(KeyCode::PageDown);
+    }
+    let screen = tui.screen();
+    assert!(screen.lines().any(|it| it.trim() == "Last line"), "{screen}");
+
+    tui.press(KeyCode::Right);
+    let screen = tui.wait_for("Part one of the handbook");
+    assert!(screen.contains("43 of 43"), "{screen}");
+    for _ in 0..30 {
+        tui.press(KeyCode::PageDown);
+    }
+    let screen = tui.screen();
+    assert!(screen.lines().any(|it| it.trim() == "being on call."), "{screen}");
+}
+
+#[test]
+fn q_does_not_quit_and_ctrl_c_asks_first() {
+    let mut tui = library();
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Recipes");
+
+    tui.press(KeyCode::Char('q'));
+    let screen = tui.screen();
+    assert!(!screen.contains("Quit writebook tui?"), "{screen}");
+    assert!(!tui.app.done);
+
+    tui.ctrl('c');
+    let screen = tui.screen();
+    assert!(screen.contains("Quit writebook tui?"), "{screen}");
+    tui.press(KeyCode::Esc);
+    let screen = tui.screen();
+    assert!(!screen.contains("Quit writebook tui?"), "{screen}");
+    assert!(!tui.app.done);
+
+    tui.ctrl('c');
+    tui.press(KeyCode::Char('y'));
+    assert!(!tui.app.done, "y is no answer; the choice is");
+    tui.press(KeyCode::Right);
+    tui.press(KeyCode::Enter);
+    let screen = tui.screen();
+    assert!(!screen.contains("Quit writebook tui?"), "{screen}");
+    assert!(!tui.app.done, "No was chosen");
+
+    tui.ctrl('c');
+    tui.press(KeyCode::Enter);
+    assert!(tui.app.done, "Yes is chosen to start with");
+}
+
+#[test]
+fn a_second_ctrl_c_quits_and_staying_brings_back_the_open_overlay() {
+    let mut tui = library();
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Recipes");
+    tui.press(KeyCode::Char('/'));
+
+    tui.ctrl('c');
+    tui.press(KeyCode::Esc);
+    let screen = tui.screen();
+    assert!(screen.contains("Search all books"), "{screen}");
+    assert!(!tui.app.done);
+
+    tui.ctrl('c');
+    tui.ctrl('c');
+    assert!(tui.app.done);
+}
+
+#[test]
+fn pasted_lines_join_into_one_search() {
+    let mut tui = library();
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Recipes");
+    tui.press(KeyCode::Char('/'));
+
+    tui.paste("handbook\n");
+    tui.press(KeyCode::Enter);
+    tui.wait_for_request("GET", "/search.json?q=handbook");
+}
+
+#[test]
+fn the_instances_keep_the_selected_one_in_view() {
+    let mut tui = library();
+    let url = tui.server.url.clone();
+    tui.app.instances = Loading::Ready(
+        (1..=20)
+            .map(|number| Instance {
+                alias: format!("books{number}"),
+                url: url.clone(),
+                status: "signed in".to_string(),
+            })
+            .collect(),
+    );
+
+    for _ in 0..19 {
+        tui.press(KeyCode::Down);
+    }
+    let screen = tui.screen();
+    assert!(screen.contains("› books20"), "{screen}");
 }

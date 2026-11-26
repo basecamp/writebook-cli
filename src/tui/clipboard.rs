@@ -7,14 +7,10 @@ use base64::engine::general_purpose::STANDARD;
 use std::io::Write;
 use url::Url;
 
-pub fn copy(text: &str) -> std::io::Result<()> {
-    let mut stdout = std::io::stdout();
-    write!(stdout, "{}", sequence(text))?;
-    stdout.flush()
-}
-
-fn sequence(text: &str) -> String {
-    format!("\x1b]52;c;{}\x07", STANDARD.encode(text))
+/// Writes the OSC 52 sequence that puts the text on the clipboard of the terminal reading `terminal`.
+pub fn copy(text: &str, terminal: &mut impl Write) -> std::io::Result<()> {
+    write!(terminal, "\x1b]52;c;{}\x07", STANDARD.encode(text))?;
+    terminal.flush()
 }
 
 /// Whether a link from Writebook is safe to copy or show as a QR code: a web
@@ -42,11 +38,14 @@ mod tests {
 
     #[test]
     fn encodes_the_clipboard_text_as_base64() {
+        let mut terminal = Vec::new();
+        copy("https://books.example.com/2/guide", &mut terminal).unwrap();
+        copy("ab", &mut terminal).unwrap();
+
         assert_eq!(
-            sequence("https://books.example.com/2/guide"),
-            "\x1b]52;c;aHR0cHM6Ly9ib29rcy5leGFtcGxlLmNvbS8yL2d1aWRl\x07"
+            String::from_utf8(terminal).unwrap(),
+            "\x1b]52;c;aHR0cHM6Ly9ib29rcy5leGFtcGxlLmNvbS8yL2d1aWRl\x07\x1b]52;c;YWI=\x07"
         );
-        assert_eq!(sequence("ab"), "\x1b]52;c;YWI=\x07");
     }
 
     #[test]

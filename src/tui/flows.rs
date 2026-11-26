@@ -9,6 +9,8 @@ mod book_editing;
 mod browsing;
 mod page_editing;
 mod people;
+mod stale_replies;
+mod tiny_terminals;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
@@ -110,8 +112,17 @@ impl Tui {
             .collect()
     }
 
-    pub fn screen(&mut self) -> String {
+    /// Make the terminal this size, as when the person resizes the window.
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    }
+
+    pub fn draw(&mut self) {
         self.terminal.draw(|frame| self.app.draw(frame)).unwrap();
+    }
+
+    pub fn screen(&mut self) -> String {
+        self.draw();
 
         let buffer = self.terminal.backend().buffer();
         let width = buffer.area.width as usize;

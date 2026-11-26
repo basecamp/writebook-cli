@@ -450,7 +450,7 @@ impl App {
     fn copy_link(&mut self, url: String) {
         let host = self.screen.host().unwrap_or_default();
 
-        let copied = clipboard::shareable(&url, host).and_then(|()| Ok(clipboard::copy(&url)?));
+        let copied = clipboard::shareable(&url, host).and_then(|()| Ok(clipboard::copy(&url, &mut std::io::stdout())?));
 
         match copied {
             Ok(()) => self.notice = Some(format!("Copied {url}")),
@@ -462,6 +462,3 @@ impl App {
 fn is_tab_or_ctrl_i(key: KeyEvent) -> bool {
     key.code == KeyCode::Tab || (key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL))
 }
-
-#[cfg(test)]
-mod tests;

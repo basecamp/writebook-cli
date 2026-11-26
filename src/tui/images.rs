@@ -273,10 +273,11 @@ mod tests {
     fn drops_the_image_drawn_longest_ago_and_fetches_it_again_when_drawn() {
         let mut images = Images::none();
         let (messages, fetched) = channel();
-        let paths: Vec<PathBuf> = (0..=IMAGES_KEPT)
+        let paths: Vec<PathBuf> = (0..500)
             .map(|it| PathBuf::from(format!("/nonexistent/{it}.png")))
             .collect();
         let sources: Vec<Source> = paths.iter().map(|it| Source::file(it)).collect();
+        let newest = sources.len() - 1;
 
         for path in &paths {
             images.want_file(path, &messages);
@@ -287,13 +288,13 @@ mod tests {
         terminal
             .draw(|frame| {
                 assert!(!images.draw(frame, frame.area(), &sources[0]));
-                assert!(images.draw(frame, frame.area(), &sources[1]));
+                assert!(images.draw(frame, frame.area(), &sources[newest]));
             })
             .unwrap();
 
         let fetches = fetched
             .iter()
-            .take(IMAGES_KEPT + 2)
+            .take(paths.len() + 1)
             .filter(|it| matches!(it, Message::Image(source, _) if *source == sources[0]))
             .count();
         assert_eq!(fetches, 2);

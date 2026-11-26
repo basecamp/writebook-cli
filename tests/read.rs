@@ -80,6 +80,42 @@ fn reads_through_the_api_with_a_token() {
 }
 
 #[test]
+fn reads_a_whole_book_through_the_api_as_markdown_with_front_matter() {
+    let server = Server::start(|request| {
+        if request.header("Authorization") != Some("Bearer secret") {
+            return reply(401, "");
+        }
+
+        match request.path.as_str() {
+            "/books/4/manifest.json" => reply(
+                200,
+                r#"{"book":{"id":4,"title":"On \"call\"","subtitle":null,"author":"Ops","theme":"blue","slug":"handbook","fingerprint":"f","cover":null},
+                    "leaves":[{"id":12,"title":"On call","type":"Page","fingerprint":"g"}]}"#,
+            ),
+            "/books/4/pages/12.json" => reply(
+                200,
+                r##"{"id":12,"title":"On call","type":"Page","fingerprint":"g","body":"# Steps"}"##,
+            ),
+            _ => reply(404, ""),
+        }
+    });
+
+    let output = writebook(
+        &["read", &format!("{}/4/handbook", server.url)],
+        &[("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "---\ntitle: \"On \\\"call\\\"\"\nauthor: \"Ops\"\nurl: \"{}/4/handbook\"\n---\n\n# Steps\n",
+            server.url
+        )
+    );
+}
+
+#[test]
 fn falls_back_to_the_export_when_the_site_has_no_api() {
     let server = Server::start(|request| match request.path.as_str() {
         "/4/handbook/12/on-call.md" => reply(200, PAGE_MD),
