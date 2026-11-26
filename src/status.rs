@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::api;
-use crate::checkout::Checkout;
+use crate::checkout::{Checkout, Remote};
 use crate::index;
 use crate::plan::{self, Comparison, Manifest};
 use crate::sync;
@@ -16,7 +16,9 @@ pub fn run() -> Result<()> {
     let comparison = plan::compare(&checkout, &state, &document, manifest.as_ref())?;
 
     print_local_changes(&comparison);
-    print_remote_changes(&comparison, manifest.is_some());
+    if manifest.is_some() {
+        print_remote_changes(&comparison);
+    }
     print_conflicts(&comparison);
     print_untracked(&checkout, &document.entries)?;
 
@@ -27,13 +29,17 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn fetch_manifest_if_reachable(origin: &crate::checkout::Remote) -> Option<Manifest> {
-    let attempt = api::Client::connect(&origin.url).and_then(|mut client| sync::fetch_manifest(&mut client, origin.book_id));
+fn fetch_manifest_if_reachable(origin: &Remote) -> Option<Manifest> {
+    let attempt =
+        api::Client::connect(&origin.url).and_then(|mut client| sync::fetch_manifest(&mut client, origin.book_id));
 
     match attempt {
         Ok(manifest) => Some(manifest),
         Err(error) => {
-            eprintln!("note: could not reach {} ({error:#}) — showing local changes only", origin.url);
+            eprintln!(
+                "note: could not reach {} ({error:#}) — showing local changes only",
+                origin.url
+            );
             None
         }
     }
@@ -52,14 +58,23 @@ fn print_local_changes(comparison: &Comparison) {
 
     for leaf in &comparison.leaves {
         if leaf.deleted_locally() {
-            lines.push(format!("deleted:    {}", label(&leaf.state.filename, &leaf.state.title)));
+            lines.push(format!(
+                "deleted:    {}",
+                label(&leaf.state.filename, &leaf.state.title)
+            ));
         } else if leaf.changed_locally {
-            lines.push(format!("modified:   {}", label(&leaf.state.filename, &leaf.state.title)));
+            lines.push(format!(
+                "modified:   {}",
+                label(&leaf.state.filename, &leaf.state.title)
+            ));
         }
     }
 
     for entry in &comparison.added_locally {
-        lines.push(format!("added:      {}", label(&entry.filename().map(str::to_string), entry.title())));
+        lines.push(format!(
+            "added:      {}",
+            label(&entry.filename().map(str::to_string), entry.title())
+        ));
     }
 
     if comparison.order_changed_locally {
@@ -75,11 +90,7 @@ fn print_local_changes(comparison: &Comparison) {
     }
 }
 
-fn print_remote_changes(comparison: &Comparison, online: bool) {
-    if !online {
-        return;
-    }
-
+fn print_remote_changes(comparison: &Comparison) {
     let mut lines = Vec::new();
 
     if comparison.book_changed_remotely {
@@ -88,9 +99,15 @@ fn print_remote_changes(comparison: &Comparison, online: bool) {
 
     for leaf in &comparison.leaves {
         if leaf.deleted_remotely {
-            lines.push(format!("deleted:    {}", label(&leaf.state.filename, &leaf.state.title)));
+            lines.push(format!(
+                "deleted:    {}",
+                label(&leaf.state.filename, &leaf.state.title)
+            ));
         } else if leaf.changed_remotely {
-            lines.push(format!("modified:   {}", label(&leaf.state.filename, &leaf.state.title)));
+            lines.push(format!(
+                "modified:   {}",
+                label(&leaf.state.filename, &leaf.state.title)
+            ));
         }
     }
 
@@ -124,7 +141,7 @@ fn print_conflicts(comparison: &Comparison) {
 }
 
 fn print_untracked(checkout: &Checkout, working: &[index::Entry]) -> Result<()> {
-    let untracked = plan::untracked_files(checkout, working)?;
+    let untracked = untracked_files(checkout, working)?;
 
     if !untracked.is_empty() {
         println!("Untracked files (add them to index.md to publish them):");
@@ -135,6 +152,26 @@ fn print_untracked(checkout: &Checkout, working: &[index::Entry]) -> Result<()> 
     }
 
     Ok(())
+}
+
+fn untracked_files(checkout: &Checkout, working: &[index::Entry]) -> Result<Vec<String>> {
+    let mut untracked = Vec::new();
+
+    for entry in std::fs::read_dir(&checkout.root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if entry.file_type()?.is_file()
+            && name.ends_with(".md")
+            && name != "index.md"
+            && !working.iter().any(|it| it.filename() == Some(name.as_str()))
+        {
+            untracked.push(name);
+        }
+    }
+
+    untracked.sort();
+    Ok(untracked)
 }
 
 fn label(filename: &Option<String>, title: &str) -> String {

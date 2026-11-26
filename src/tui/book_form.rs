@@ -16,11 +16,11 @@ use super::{Id, Loading, Message, Reply, Request, next_id, theme, views};
 
 const THEMES: [&str; 7] = ["black", "blue", "green", "magenta", "orange", "violet", "white"];
 
-pub struct EditPage {
+pub struct BookFormPage {
     pub id: Id,
     pub host: String,
     pub book_id: Option<u64>,
-    pub name: String,
+    pub instance_name: String,
     pub form: Loading<BookForm>,
     pub focus: usize,
     pub saving: bool,
@@ -50,16 +50,24 @@ pub enum Action {
     ChooseCover,
 }
 
-impl EditPage {
-    pub fn new(host: String, name: String, book_id: Option<u64>) -> EditPage {
-        EditPage { id: next_id(), host, book_id, name, form: Loading::Pending, focus: 1, saving: false }
+impl BookFormPage {
+    pub fn new(host: String, instance_name: String, book_id: Option<u64>) -> BookFormPage {
+        BookFormPage {
+            id: next_id(),
+            host,
+            book_id,
+            instance_name,
+            form: Loading::Pending,
+            focus: 1,
+            saving: false,
+        }
     }
 
     pub fn load(&self) -> Request {
         let id = self.id;
         let host = self.host.clone();
         let book_id = self.book_id;
-        Box::new(move || Message::To(id, Reply::Form(data::book_form(&host, book_id))))
+        Box::new(move || Message::To(id, Reply::BookFormLoaded(data::book_form(&host, book_id))))
     }
 
     /// Why the book can't be saved as it is.
@@ -76,7 +84,9 @@ impl EditPage {
         let host = self.host.clone();
         self.saving = true;
 
-        Some(Box::new(move || Message::To(id, Reply::Saved(data::save_book(&host, &form)))))
+        Some(Box::new(move || {
+            Message::To(id, Reply::BookSaved(data::save_book(&host, &form)))
+        }))
     }
 
     pub fn delete(&mut self, book_id: u64) -> Request {
@@ -119,8 +129,17 @@ impl EditPage {
     }
 
     pub fn fields(&self) -> Vec<Field> {
-        let Some(form) = self.form.ready() else { return Vec::new() };
-        let mut fields = vec![Field::Cover, Field::Title, Field::Subtitle, Field::Author, Field::Theme, Field::Everyone];
+        let Some(form) = self.form.ready() else {
+            return Vec::new();
+        };
+        let mut fields = vec![
+            Field::Cover,
+            Field::Title,
+            Field::Subtitle,
+            Field::Author,
+            Field::Theme,
+            Field::Everyone,
+        ];
         fields.extend((0..form.members.len()).map(Field::Member));
         fields.push(Field::Save);
 
@@ -146,41 +165,20 @@ impl EditPage {
         }
 
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return Action::Save;
-        }
-
-        let fields = self.fields();
-        let Some(field) = fields.get(self.focus).copied() else {
-            return if key.code == KeyCode::Esc { Action::Cancel } else { Action::Nothing };
-        };
-
-        match key.code {
-            KeyCode::Esc => return Action::Cancel,
-            KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % fields.len(),
-            KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + fields.len() - 1) % fields.len(),
-            KeyCode::Enter if field == Field::Save => return Action::Save,
-            KeyCode::Enter if field == Field::Delete => return self.ask_to_delete(),
-            KeyCode::Enter if field == Field::Cover => return Action::ChooseCover,
-            _ => {
-                let Loading::Ready(form) = &mut self.form else { return Action::Nothing };
-                change(form, field, key);
-            }
-        }
-
-        Action::Nothing
-    }
-
-    fn ask_to_delete(&self) -> Action {
-        match (self.book_id, self.form.ready()) {
-            (Some(book_id), Some(form)) => Action::Delete(book_id, form.title.clone()),
-            _ => Action::Nothing,
+            Action::Save
+        } else {
+            self.field_key(key)
         }
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
-        let title = self.form.ready().map(|it| it.title.clone()).filter(|it| !it.is_empty() && self.book_id.is_some());
+        let title = self
+            .form
+            .ready()
+            .map(|it| it.title.clone())
+            .filter(|it| !it.is_empty() && self.book_id.is_some());
         let last = if self.book_id.is_some() { "Edit" } else { "New book" };
-        let mut steps = vec![self.name.as_str(), "Books"];
+        let mut steps = vec![self.instance_name.as_str(), "Books"];
         steps.extend(title.as_deref());
         steps.push(last);
         let area = views::breadcrumbs(frame, area, &steps);
@@ -202,22 +200,72 @@ impl EditPage {
             Constraint::Length(1),
         ])
         .areas(area);
-        let [cover, _, fields] = Layout::horizontal([Constraint::Length(20), Constraint::Length(2), Constraint::Fill(1)]).areas(top);
+        let [cover, _, fields] =
+            Layout::horizontal([Constraint::Length(20), Constraint::Length(2), Constraint::Fill(1)]).areas(top);
 
         draw_cover(frame, cover, &self.host, form, focused == Some(Field::Cover), images);
 
         let [title, subtitle, author, theme] = Layout::vertical([Constraint::Length(3); 4]).areas(fields);
         input(frame, title, "Title", &form.title, focused == Some(Field::Title), true);
-        input(frame, subtitle, "Subtitle", &form.subtitle, focused == Some(Field::Subtitle), false);
-        input(frame, author, "Author", &form.author, focused == Some(Field::Author), false);
+        input(
+            frame,
+            subtitle,
+            "Subtitle",
+            &form.subtitle,
+            focused == Some(Field::Subtitle),
+            false,
+        );
+        input(
+            frame,
+            author,
+            "Author",
+            &form.author,
+            focused == Some(Field::Author),
+            false,
+        );
         draw_themes(frame, theme, &form.theme, focused == Some(Field::Theme));
 
         draw_access(frame, access, form, focused);
         draw_buttons(frame, buttons, form.id.is_some(), focused, self.saving);
     }
+
+    fn field_key(&mut self, key: KeyEvent) -> Action {
+        let fields = self.fields();
+
+        match fields.get(self.focus).copied() {
+            None if key.code == KeyCode::Esc => Action::Cancel,
+            None => Action::Nothing,
+            Some(field) => match key.code {
+                KeyCode::Esc => Action::Cancel,
+                KeyCode::Tab | KeyCode::Down => {
+                    self.focus = (self.focus + 1) % fields.len();
+                    Action::Nothing
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    self.focus = (self.focus + fields.len() - 1) % fields.len();
+                    Action::Nothing
+                }
+                KeyCode::Enter if field == Field::Save => Action::Save,
+                KeyCode::Enter if field == Field::Delete => self.ask_to_delete(),
+                KeyCode::Enter if field == Field::Cover => Action::ChooseCover,
+                _ => {
+                    if let Loading::Ready(form) = &mut self.form {
+                        change(form, field, key);
+                    }
+                    Action::Nothing
+                }
+            },
+        }
+    }
+
+    fn ask_to_delete(&self) -> Action {
+        match (self.book_id, self.form.ready()) {
+            (Some(book_id), Some(form)) => Action::Delete(book_id, form.title.clone()),
+            _ => Action::Nothing,
+        }
+    }
 }
 
-/// What ←, → or a typed character does to the focused field.
 fn change(form: &mut BookForm, field: Field, key: KeyEvent) {
     let step = match key.code {
         KeyCode::Left => -1,
@@ -237,7 +285,9 @@ fn change(form: &mut BookForm, field: Field, key: KeyEvent) {
         Field::Title => type_into(&mut form.title, key),
         Field::Subtitle => type_into(&mut form.subtitle, key),
         Field::Author => type_into(&mut form.author, key),
-        Field::Everyone if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) || step != 0 => form.everyone = !form.everyone,
+        Field::Everyone if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) || step != 0 => {
+            form.everyone = !form.everyone
+        }
         Field::Member(index) if step != 0 => {
             let everyone = form.everyone;
             let member = &mut form.members[index];
@@ -255,21 +305,21 @@ fn type_into(text: &mut String, key: KeyEvent) {
         KeyCode::Backspace => {
             text.pop();
         }
-        KeyCode::Char(character) if views::plain(key) => text.push(character),
+        KeyCode::Char(character) if views::types_character(key) => text.push(character),
         _ => {}
     }
 }
 
-/// No access, reader, editor, in that order. When everyone can read, the
-/// choice is only whether someone can edit too.
 fn next_role(role: Role, step: i32, everyone: bool) -> Role {
-    let roles: &[Role] = if everyone { &[Role::Reader, Role::Editor] } else { &[Role::None, Role::Reader, Role::Editor] };
+    let roles: &[Role] = if everyone {
+        &[Role::Reader, Role::Editor]
+    } else {
+        &[Role::None, Role::Reader, Role::Editor]
+    };
     let index = roles.iter().position(|it| *it == role).unwrap_or(0) as i32;
     roles[(index + step).clamp(0, roles.len() as i32 - 1) as usize]
 }
 
-/// The theme colors in a row, framed like the fields above, the book's
-/// own ringed.
 fn draw_themes(frame: &mut Frame, area: Rect, current: &str, focused: bool) {
     let mut spans = Vec::new();
 
@@ -292,13 +342,19 @@ fn draw_themes(frame: &mut Frame, area: Rect, current: &str, focused: bool) {
 fn draw_cover(frame: &mut Frame, area: Rect, host: &str, form: &BookForm, focused: bool, images: &mut Images) {
     let [picture, caption] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
     let border = if focused { Color::Blue } else { Color::DarkGray };
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(border));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border));
     let inside = block.inner(picture);
     frame.render_widget(block, picture);
 
     let shown = match &form.new_cover {
         Some(path) => Some(Source::file(std::path::Path::new(path))),
-        None => form.cover.as_deref().filter(|_| !form.remove_cover).map(|it| Source::remote(host, it)),
+        None => form
+            .cover
+            .as_deref()
+            .filter(|_| !form.remove_cover)
+            .map(|it| Source::remote(host, it)),
     };
     let drawn = match shown {
         Some(source) => images.draw(frame, inside, &source),
@@ -306,7 +362,12 @@ fn draw_cover(frame: &mut Frame, area: Rect, host: &str, form: &BookForm, focuse
     };
 
     if !drawn {
-        views::themed_cover(frame, inside, if form.title.is_empty() { "Untitled" } else { &form.title }, Some(&form.theme));
+        views::themed_cover(
+            frame,
+            inside,
+            if form.title.is_empty() { "Untitled" } else { &form.title },
+            Some(&form.theme),
+        );
     }
 
     let note = match &form.new_cover {
@@ -323,11 +384,23 @@ fn input(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bool,
 }
 
 fn draw_access(frame: &mut Frame, area: Rect, form: &BookForm, focused: Option<Field>) {
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::DarkGray)).title(" Access ".dim());
-    let inside = block.inner(area).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" Access ".dim());
+    let inside = block.inner(area).inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     frame.render_widget(block, area);
 
-    let mut rows = vec![row(inside.width, "Everyone", if form.everyone { "on" } else { "off" }, focused == Some(Field::Everyone), true)];
+    let mut rows = vec![row(
+        inside.width,
+        "Everyone",
+        if form.everyone { "on" } else { "off" },
+        focused == Some(Field::Everyone),
+        true,
+    )];
 
     for (index, member) in form.members.iter().enumerate() {
         let role = match member.role {
@@ -336,8 +409,18 @@ fn draw_access(frame: &mut Frame, area: Rect, form: &BookForm, focused: Option<F
             Role::None if form.everyone => "can read",
             Role::None => "no access",
         };
-        let name = if member.can_administer { format!("♛ {}", member.name) } else { member.name.clone() };
-        rows.push(row(inside.width, &name, role, focused == Some(Field::Member(index)), !member.fixed()));
+        let name = if member.can_administer {
+            format!("♛ {}", member.name)
+        } else {
+            member.name.clone()
+        };
+        rows.push(row(
+            inside.width,
+            &name,
+            role,
+            focused == Some(Field::Member(index)),
+            !member.fixed(),
+        ));
     }
 
     let scroll = match focused {
@@ -347,17 +430,23 @@ fn draw_access(frame: &mut Frame, area: Rect, form: &BookForm, focused: Option<F
     frame.render_widget(Paragraph::new(rows).scroll((scroll, 0)), inside);
 }
 
-/// A name, a dotted line, and its setting at the right, which ←→ changes
-/// when it can.
 fn row(width: u16, name: &str, value: &str, focused: bool, changeable: bool) -> Line<'static> {
-    let value = if changeable { format!("‹ {value} ›") } else { value.to_string() };
+    let value = if changeable {
+        format!("‹ {value} ›")
+    } else {
+        value.to_string()
+    };
     let used = name.width() + value.width() + 4;
     let dots = ".".repeat(usize::from(width).saturating_sub(used));
     let marker = if focused { "› " } else { "  " };
 
     let name = Span::from(format!("{marker}{name}"));
     let value = Span::from(value);
-    let (name, value) = if focused { (name.fg(Color::Blue).bold(), value.fg(Color::Blue).bold()) } else { (name, value.dim()) };
+    let (name, value) = if focused {
+        (name.fg(Color::Blue).bold(), value.fg(Color::Blue).bold())
+    } else {
+        (name, value.dim())
+    };
 
     Line::from(vec![name, Span::from(format!(" {dots} ")).fg(Color::DarkGray), value])
 }
@@ -371,7 +460,11 @@ fn draw_buttons(frame: &mut Frame, area: Rect, existing: bool, focused: Option<F
         }
     };
 
-    let save = if saving { Span::from(" Saving… ").dim() } else { button(if existing { "Save" } else { "Create book" }, Field::Save, Color::Blue) };
+    let save = if saving {
+        Span::from(" Saving… ").dim()
+    } else {
+        button(if existing { "Save" } else { "Create book" }, Field::Save, Color::Blue)
+    };
     let mut spans = vec![save];
 
     if existing {
@@ -379,16 +472,28 @@ fn draw_buttons(frame: &mut Frame, area: Rect, existing: bool, focused: Option<F
         spans.push(button("Delete book", Field::Delete, Color::Red));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(spans)).alignment(Alignment::Center).wrap(Wrap { trim: false }), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn centered_column(area: Rect, width: u16) -> Rect {
     let width = width.min(area.width);
-    Rect { x: area.x + (area.width - width) / 2, width, ..area }
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        width,
+        ..area
+    }
 }
 
 fn file_name(path: &str) -> String {
-    std::path::Path::new(path).file_name().map(|it| it.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
+    match std::path::Path::new(path).file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => path.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -401,11 +506,21 @@ mod tests {
     }
 
     fn member(id: u64, role: Role, can_administer: bool) -> Member {
-        Member { id, name: format!("Person {id}"), role, can_administer, current: false }
+        Member {
+            id,
+            name: format!("Person {id}"),
+            role,
+            can_administer,
+            current: false,
+        }
     }
 
-    fn page(book_id: Option<u64>) -> EditPage {
-        let mut page = EditPage::new("https://books.example.com".to_string(), "books.example.com".to_string(), book_id);
+    fn page(book_id: Option<u64>) -> BookFormPage {
+        let mut page = BookFormPage::new(
+            "https://books.example.com".to_string(),
+            "books.example.com".to_string(),
+            book_id,
+        );
         page.form = Loading::Ready(BookForm {
             id: book_id,
             title: "Handbook".to_string(),
@@ -421,7 +536,7 @@ mod tests {
         page
     }
 
-    fn form(page: &EditPage) -> &BookForm {
+    fn form(page: &BookFormPage) -> &BookForm {
         page.form.ready().unwrap()
     }
 
@@ -505,7 +620,10 @@ mod tests {
     fn saves_with_ctrl_s_anywhere_and_esc_cancels() {
         let mut page = page(Some(4));
 
-        assert!(matches!(page.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)), Action::Save));
+        assert!(matches!(
+            page.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            Action::Save
+        ));
         assert!(matches!(page.key(press(KeyCode::Esc)), Action::Cancel));
     }
 }

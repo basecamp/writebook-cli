@@ -16,7 +16,7 @@ use crate::sync::{self, RemoteLeafContent};
 pub fn run() -> Result<()> {
     let checkout = Checkout::find()?;
     let origin = checkout.origin()?;
-    let mut state = checkout.state()?;
+    let state = checkout.state()?;
     let document = index::parse(&checkout.read_working("index.md")?)?;
 
     plan::ensure_no_conflict_markers(&checkout, &document.entries)?;
@@ -25,13 +25,33 @@ pub fn run() -> Result<()> {
     let manifest = sync::fetch_manifest(&mut client, origin.book_id)?;
     let comparison = plan::compare(&checkout, &state, &document, Some(&manifest))?;
 
-    if !comparison.changed_remotely() {
+    if comparison.changed_remotely() {
+        land_remote_changes(
+            &checkout,
+            origin.book_id,
+            state,
+            client,
+            &document,
+            &manifest,
+            &comparison,
+        )
+    } else {
         println!("Already up to date.");
-        return Ok(());
+        Ok(())
     }
+}
 
+fn land_remote_changes(
+    checkout: &Checkout,
+    book_id: u64,
+    mut state: State,
+    mut client: api::Client,
+    document: &index::Document,
+    manifest: &plan::Manifest,
+    comparison: &plan::Comparison,
+) -> Result<()> {
     let mut conflicts = Vec::new();
-    let mut taken = plan::taken_filenames(&checkout, &state, &document.entries)?;
+    let mut taken = taken_filenames(checkout, &state, &document.entries)?;
 
     if comparison.book_changed_remotely {
         state.book_fingerprint = manifest.book.fingerprint.clone();
@@ -43,7 +63,7 @@ pub fn run() -> Result<()> {
         match state.leaves.iter().position(|it| it.id == leaf.id) {
             None => {
                 if let Some(entry) =
-                    sync::materialize_leaf(&mut client, &checkout, &mut state, origin.book_id, leaf, &mut taken)?
+                    sync::materialize_leaf(&mut client, checkout, &mut state, book_id, leaf, &mut taken)?
                 {
                     println!("  new: {}", entry.filename().unwrap_or(entry.title()));
                     remote_entries.push(entry);
@@ -55,10 +75,17 @@ pub fn run() -> Result<()> {
                         remote_entries.push(entry);
                     }
                 } else {
-                    let content = sync::fetch_leaf(&mut client, origin.book_id, &leaf.kind, leaf.id)?;
+                    let content = sync::fetch_leaf(&mut client, book_id, &leaf.kind, leaf.id)?;
 
                     if let Some(entry) = apply_remote_change(
-                        &mut client, &checkout, &mut state, position, leaf, content, &mut taken, &mut conflicts,
+                        &mut client,
+                        checkout,
+                        &mut state,
+                        position,
+                        leaf,
+                        content,
+                        &mut taken,
+                        &mut conflicts,
                     )? {
                         remote_entries.push(entry);
                     }
@@ -67,18 +94,18 @@ pub fn run() -> Result<()> {
         }
     }
 
-    carry_over_deleted_leaves(&checkout, &state, &comparison, &mut remote_entries)?;
+    carry_over_deleted_leaves(checkout, &state, comparison, &mut remote_entries)?;
 
-    let kept_local_cover = sync::mirror_cover(&mut client, &checkout, &mut state, &manifest)?;
+    let kept_local_cover = sync::mirror_cover(&mut client, checkout, &mut state, manifest)?;
 
-    let mut meta = sync::book_meta(&manifest, &state);
+    let mut meta = sync::book_meta(manifest, &state);
 
     if kept_local_cover {
         meta.cover = state.cover.as_ref().map(|it| it.filename.clone());
     }
 
     let remote_index = index::serialize(&meta, &remote_entries);
-    merge_file(&checkout, "index.md", &remote_index, &mut conflicts)?;
+    merge_file(checkout, "index.md", &remote_index, &mut conflicts)?;
 
     state.leaves = manifest
         .leaves
@@ -91,16 +118,42 @@ pub fn run() -> Result<()> {
         println!("Pulled.");
         Ok(())
     } else {
-        bail!("merge conflicts in {} — resolve the markers, then push", conflicts.join(", "))
+        bail!(
+            "merge conflicts in {} — resolve the markers, then push",
+            conflicts.join(", ")
+        )
     }
 }
 
-/// Land a remote text change: fast-forward when only one side moved, merge
-/// when both did. Either way the base advances to the remote version, so the
-/// working copy's difference from base is exactly what's left to push.
+fn taken_filenames(checkout: &Checkout, state: &State, working: &[Entry]) -> Result<Vec<String>> {
+    let mut taken = vec!["index.md".to_string()];
+
+    for entry in std::fs::read_dir(&checkout.root)? {
+        let entry = entry?;
+
+        if entry.file_type()?.is_file() {
+            taken.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+
+    let assets = checkout.root.join("assets");
+
+    if assets.is_dir() {
+        for entry in std::fs::read_dir(&assets)? {
+            taken.push(format!("assets/{}", entry?.file_name().to_string_lossy()));
+        }
+    }
+
+    taken.extend(state.leaves.iter().filter_map(|it| it.filename.clone()));
+    taken.extend(working.iter().filter_map(|it| it.filename()).map(str::to_string));
+    taken.sort();
+    taken.dedup();
+    Ok(taken)
+}
+
 fn merge_file(checkout: &Checkout, filename: &str, remote_text: &str, conflicts: &mut Vec<String>) -> Result<()> {
-    let base = checkout.read_base(filename).unwrap_or_default();
-    let ours = checkout.read_working(filename).unwrap_or_default();
+    let base = checkout.read_base_or_empty(filename)?;
+    let ours = checkout.read_working_or_empty(filename)?;
 
     if ours == base || ours == remote_text {
         checkout.write_working(filename, remote_text)?;
@@ -132,17 +185,27 @@ fn apply_remote_change(
             let body = merge::localize_upload_urls(&content.body.clone().unwrap_or_default());
             sync::mirror_uploads(client, checkout, state, &body)?;
 
-            let filename = state.leaves[position].filename.clone().expect("a page always has a file");
+            let filename = state.leaves[position]
+                .filename
+                .clone()
+                .expect("a page always has a file");
             merge_file(checkout, &filename, &body, conflicts)?;
 
-            Some(Entry::Page { title: content.title.clone(), filename })
+            Some(Entry::Page {
+                title: content.title.clone(),
+                filename,
+            })
         }
         "Section" => {
             let body = content.body.clone().unwrap_or_default();
             let filename = apply_section_body(checkout, state, position, leaf, &content, &body, taken, conflicts)?;
             state.leaves[position].theme = content.theme.clone();
 
-            Some(Entry::Section { title: content.title.clone(), filename, theme: content.theme.clone() })
+            Some(Entry::Section {
+                title: content.title.clone(),
+                filename,
+                theme: content.theme.clone(),
+            })
         }
         "Picture" => {
             let caption = content.caption.clone().unwrap_or_default();
@@ -187,14 +250,16 @@ fn apply_section_body(
             Ok(Some(filename))
         }
         (true, Some(filename)) => {
-            let modified = checkout.read_working(&filename).unwrap_or_default()
-                != checkout.read_base(&filename).unwrap_or_default();
+            let modified = checkout.read_working_or_empty(&filename)? != checkout.read_base_or_empty(&filename)?;
 
             if modified {
-                eprintln!("warning: section \"{}\" lost its body remotely, but {filename} is modified locally — keeping your file", content.title);
+                eprintln!(
+                    "warning: section \"{}\" lost its body remotely, but {filename} is modified locally — keeping your file",
+                    content.title
+                );
                 Ok(Some(filename))
             } else {
-                let _ = std::fs::remove_file(checkout.working_path(&filename)?);
+                checkout.remove_working_if_present(&filename)?;
                 checkout.remove_base(&filename)?;
                 state.leaves[position].filename = None;
                 Ok(None)
@@ -235,7 +300,7 @@ fn apply_picture_image(
             Ok(Some(filename))
         }
         (Some(image), None) => {
-            let filename = sync::claim_filename(format!("assets/{}", sync::sanitize_filename(&image.filename)), taken);
+            let filename = sync::claim_filename(sync::picture_filename(image), taken);
             let bytes = client.download(&image.url)?;
             crate::fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
 
@@ -245,16 +310,16 @@ fn apply_picture_image(
             Ok(Some(filename))
         }
         (None, Some(filename)) => {
-            eprintln!("warning: the image of \"{}\" was removed remotely — keeping {filename}", content.title.clone());
+            eprintln!(
+                "warning: the image of \"{}\" was removed remotely — keeping {filename}",
+                content.title.clone()
+            );
             Ok(Some(filename))
         }
         (None, None) => Ok(None),
     }
 }
 
-/// Leaves deleted remotely: an untouched one takes its files and index line
-/// with it (the merged index simply loses the line); a locally modified one
-/// keeps its file and line, and push will re-create it as a new leaf.
 fn carry_over_deleted_leaves(
     checkout: &Checkout,
     state: &State,
@@ -282,7 +347,7 @@ fn carry_over_deleted_leaves(
             }
         } else {
             if let Some(filename) = &leaf.filename {
-                let _ = std::fs::remove_file(checkout.working_path(filename)?);
+                checkout.remove_working_if_present(filename)?;
             }
         }
 
@@ -294,16 +359,15 @@ fn carry_over_deleted_leaves(
     Ok(())
 }
 
-/// Keep a carried-over line near its old neighbors: right after the closest
-/// preceding leaf that still has a line in the merged index.
 fn insertion_point(state: &State, position: usize, remote_entries: &[Entry]) -> usize {
-    for earlier in state.leaves[..position].iter().rev() {
-        if let Some(entry) = earlier.entry() {
-            if let Some(found) = remote_entries.iter().position(|it| *it == entry) {
-                return found + 1;
-            }
-        }
-    }
+    let preceding = state.leaves[..position]
+        .iter()
+        .rev()
+        .filter_map(|earlier| earlier.entry())
+        .find_map(|entry| remote_entries.iter().position(|it| *it == entry));
 
-    0
+    match preceding {
+        Some(found) => found + 1,
+        None => 0,
+    }
 }

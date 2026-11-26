@@ -15,10 +15,7 @@ pub fn add(name: &str, instance: Option<&str>, code: Option<&str>, access: creds
     let (alias, url) = (alias.clone(), found.url.clone());
 
     if creds::sign_in(&url, name, code, access)? {
-        Inventory::update(|inventory| {
-            inventory.add_profile(&alias, name)?;
-            Ok(())
-        })?;
+        Inventory::update(|inventory| inventory.add_profile(&alias, name))?;
         println!("Signed in to {alias} ({url}) as {name}.");
     }
 
@@ -49,7 +46,9 @@ pub fn remove(name: &str, instance: Option<&str>) -> Result<()> {
         }
 
         if found.default_profile == name {
-            bail!("'{name}' is the default profile of '{alias}'. Make another one the default with `writebook profile set-default` first");
+            bail!(
+                "'{name}' is the default profile of '{alias}'. Make another one the default with `writebook profile set-default` first"
+            );
         }
 
         creds::forget(&found.url, name)?;
@@ -66,7 +65,9 @@ pub fn set_default(name: &str, instance: Option<&str>) -> Result<()> {
         let (alias, found) = inventory.find_mut(instance)?;
 
         if !found.profiles.iter().any(|it| it == name) {
-            bail!("instance '{alias}' has no profile '{name}'. Add it with `writebook profile add {name} --instance {alias}`");
+            bail!(
+                "instance '{alias}' has no profile '{name}'. Add it with `writebook profile add {name} --instance {alias}`"
+            );
         }
 
         found.default_profile = name.to_string();

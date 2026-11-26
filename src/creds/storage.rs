@@ -8,7 +8,7 @@
 //!
 //! credentials.json also lists which sign-ins are in the keyring, so a
 //! command that can't reach the keyring (say, over SSH) says so instead of
-//! acting signed out, and signing out never leaves one behind there.
+//! acting signed out, and signing out leaves none behind there.
 //!
 //! A sign-in in the file is always the newest: it's saved there only while
 //! the keyring is out of reach, and it moves into the keyring, replacing
@@ -90,7 +90,10 @@ pub fn save(host: &str, profile: &str, credentials: &Credentials) -> Result<()> 
             file.in_keyring.insert(key);
         } else {
             if std::env::var_os("WRITEBOOK_NO_KEYRING").is_none() {
-                eprintln!("warning: no system keyring, so the sign-in is kept in {}", file_path()?.display());
+                eprintln!(
+                    "warning: no system keyring, so the sign-in is kept in {}",
+                    file_path()?.display()
+                );
             }
             file.sign_ins.insert(key, credentials.clone());
         }
@@ -109,7 +112,9 @@ pub fn delete(host: &str, profile: &str) -> Result<()> {
         if keyring_reachable() {
             match entry(&key)?.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(error) => return Err(error).with_context(|| format!("could not remove {key} from the system keyring")),
+                Err(error) => {
+                    return Err(error).with_context(|| format!("could not remove {key} from the system keyring"));
+                }
             }
         } else if file.in_keyring.contains(&key) {
             return Err(out_of_reach(host, profile));
@@ -156,7 +161,11 @@ fn out_of_reach(host: &str, profile: &str) -> anyhow::Error {
 
 fn get_from_keyring(key: &str) -> Result<Option<Credentials>> {
     match entry(key)?.get_password() {
-        Ok(json) => Ok(Some(serde_json::from_str(&json).with_context(|| format!("could not parse the keyring entry for {key}"))?)),
+        Ok(json) => {
+            Ok(Some(serde_json::from_str(&json).with_context(|| {
+                format!("could not parse the keyring entry for {key}")
+            })?))
+        }
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error).with_context(|| format!("could not read {key} from the system keyring")),
     }
@@ -177,7 +186,10 @@ fn keyring_reachable() -> bool {
 }
 
 fn keyring_works() -> bool {
-    matches!(entry(AVAILABILITY_PROBE).map(|it| it.get_password()), Ok(Ok(_) | Err(keyring::Error::NoEntry)))
+    matches!(
+        entry(AVAILABILITY_PROBE).map(|it| it.get_password()),
+        Ok(Ok(_) | Err(keyring::Error::NoEntry))
+    )
 }
 
 fn entry(key: &str) -> Result<keyring::Entry> {

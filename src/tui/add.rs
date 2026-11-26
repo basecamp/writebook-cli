@@ -42,7 +42,6 @@ enum Kind {
 struct Field {
     label: &'static str,
     value: String,
-    /// Filled in with the file picker rather than typed.
     file: bool,
 }
 
@@ -63,6 +62,58 @@ impl Add {
         }
     }
 
+    pub fn use_file(&mut self, path: &Path) {
+        if let Some(form) = &mut self.form
+            && let Some(field) = form.fields.iter_mut().find(|it| it.file)
+        {
+            field.value = path.to_string_lossy().into_owned();
+        }
+    }
+
+    /// The page, picture or section to add, once every field is filled in.
+    pub fn new_leaf(&self) -> Option<NewLeaf> {
+        let form = self
+            .form
+            .as_ref()
+            .filter(|form| form.fields.iter().all(|it| !it.value.trim().is_empty()))?;
+        let value = |index: usize| form.fields[index].value.trim().to_string();
+
+        match form.kind {
+            Kind::Page => Some(NewLeaf::Page { title: value(0) }),
+            Kind::Section => Some(NewLeaf::Section { title: value(0) }),
+            Kind::Picture => Some(NewLeaf::Picture {
+                caption: value(0),
+                path: value(1),
+            }),
+        }
+    }
+
+    pub fn bindings(&self) -> Vec<Binding> {
+        match &self.form {
+            None => vec![("↑↓", "select"), ("enter", "choose"), ("esc", "close")],
+            Some(form) => vec![
+                ("tab", "next"),
+                ("enter", form.enter_name()),
+                ("esc", "back"),
+                ("ctrl+s", "add"),
+            ],
+        }
+    }
+
+    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+        match &self.form {
+            None => {
+                let lines = ["Page", "Picture", "Section"]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, choice)| views::choice_line(choice, index == self.choice))
+                    .collect();
+                views::window(frame, area, " Add ", lines, 44);
+            }
+            Some(form) => form.draw(frame, area),
+        }
+    }
+
     fn choice_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => return Action::Close,
@@ -74,48 +125,15 @@ impl Add {
 
         Action::Nothing
     }
-
-    pub fn use_file(&mut self, path: &Path) {
-        if let Some(form) = &mut self.form
-            && let Some(field) = form.fields.iter_mut().find(|it| it.file)
-        {
-            field.value = path.to_string_lossy().into_owned();
-        }
-    }
-
-    /// The page, picture or section to add, once every field is filled in.
-    pub fn new_leaf(&self) -> Option<NewLeaf> {
-        let form = self.form.as_ref().filter(|form| form.fields.iter().all(|it| !it.value.trim().is_empty()))?;
-        let value = |index: usize| form.fields[index].value.trim().to_string();
-
-        match form.kind {
-            Kind::Page => Some(NewLeaf::Page { title: value(0) }),
-            Kind::Section => Some(NewLeaf::Section { title: value(0) }),
-            Kind::Picture => Some(NewLeaf::Picture { caption: value(0), path: value(1) }),
-        }
-    }
-
-    pub fn bindings(&self) -> Vec<Binding> {
-        match &self.form {
-            None => vec![("↑↓", "select"), ("enter", "choose"), ("esc", "close")],
-            Some(form) => vec![("tab", "next"), ("enter", form.enter_name()), ("esc", "back"), ("ctrl+s", "add")],
-        }
-    }
-
-    pub fn draw(&self, frame: &mut Frame, area: Rect) {
-        match &self.form {
-            None => {
-                let lines = ["Page", "Picture", "Section"].iter().enumerate().map(|(index, choice)| views::choice_line(choice, index == self.choice)).collect();
-                views::window(frame, area, " Add ", lines, 44);
-            }
-            Some(form) => form.draw(frame, area),
-        }
-    }
 }
 
 impl Form {
     fn new(kind: Kind) -> Form {
-        Form { kind, fields: kind.fields(), focus: 0 }
+        Form {
+            kind,
+            fields: kind.fields(),
+            focus: 0,
+        }
     }
 
     fn key(&mut self, key: KeyEvent) -> Action {
@@ -135,7 +153,7 @@ impl Form {
                     field.value.pop();
                 }
             }
-            KeyCode::Char(character) if views::plain(key) => {
+            KeyCode::Char(character) if views::types_character(key) => {
                 if let Some(field) = self.typed_field() {
                     field.value.push(character);
                 }
@@ -146,7 +164,6 @@ impl Form {
         Action::Nothing
     }
 
-    /// Every field, then the Add and Cancel buttons.
     fn stops(&self) -> usize {
         self.fields.len() + 2
     }
@@ -163,7 +180,6 @@ impl Form {
         self.fields.len()
     }
 
-    /// The focused field when it takes typing, not a file or a button.
     fn typed_field(&mut self) -> Option<&mut Field> {
         self.fields.get_mut(self.focus).filter(|it| !it.file)
     }
@@ -203,7 +219,10 @@ impl Form {
             views::input(frame, areas[index], field.label, text, focused);
         }
 
-        let buttons = views::buttons(&[("Add", self.focus == self.add_button()), ("Cancel", self.focus == self.cancel_button())]);
+        let buttons = views::buttons(&[
+            ("Add", self.focus == self.add_button()),
+            ("Cancel", self.focus == self.cancel_button()),
+        ]);
         frame.render_widget(Paragraph::new(buttons), areas[self.fields.len() + 1]);
     }
 }
@@ -229,10 +248,18 @@ impl Kind {
 
 impl Field {
     fn new(label: &'static str) -> Field {
-        Field { label, value: String::new(), file: false }
+        Field {
+            label,
+            value: String::new(),
+            file: false,
+        }
     }
 
     fn file(label: &'static str) -> Field {
-        Field { label, value: String::new(), file: true }
+        Field {
+            label,
+            value: String::new(),
+            file: true,
+        }
     }
 }

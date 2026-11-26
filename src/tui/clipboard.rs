@@ -7,10 +7,10 @@ use base64::engine::general_purpose::STANDARD;
 use std::io::Write;
 use url::Url;
 
-pub fn copy(text: &str) {
+pub fn copy(text: &str) -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
-    let _ = write!(stdout, "{}", sequence(text));
-    let _ = stdout.flush();
+    write!(stdout, "{}", sequence(text))?;
+    stdout.flush()
 }
 
 fn sequence(text: &str) -> String {
@@ -42,7 +42,10 @@ mod tests {
 
     #[test]
     fn encodes_the_clipboard_text_as_base64() {
-        assert_eq!(sequence("https://books.example.com/2/guide"), "\x1b]52;c;aHR0cHM6Ly9ib29rcy5leGFtcGxlLmNvbS8yL2d1aWRl\x07");
+        assert_eq!(
+            sequence("https://books.example.com/2/guide"),
+            "\x1b]52;c;aHR0cHM6Ly9ib29rcy5leGFtcGxlLmNvbS8yL2d1aWRl\x07"
+        );
         assert_eq!(sequence("ab"), "\x1b]52;c;YWI=\x07");
     }
 

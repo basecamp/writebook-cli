@@ -8,11 +8,10 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
-use super::{Id, Loading, next_id, views};
 use super::data::Found;
 use super::help::Binding;
+use super::{Id, Loading, next_id, views};
 use crate::web;
-
 
 pub struct Search {
     pub id: Id,
@@ -35,29 +34,80 @@ pub enum Action {
 
 impl Search {
     pub fn new(book_id: Option<u64>, scope: String) -> Search {
-        Search { id: next_id(), book_id, scope, query: String::new(), searched: None, results: None, selected: 0, offset: 0 }
+        Search {
+            id: next_id(),
+            book_id,
+            scope,
+            query: String::new(),
+            searched: None,
+            results: None,
+            selected: 0,
+            offset: 0,
+        }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
-        let count = self.found().map(<[Found]>::len).unwrap_or(0);
-
         match key.code {
-            KeyCode::Esc => return Action::Close,
-            KeyCode::Up => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down => self.selected = (self.selected + 1).min(count.saturating_sub(1)),
-            KeyCode::Enter => return self.enter(),
+            KeyCode::Esc => Action::Close,
+            KeyCode::Up => {
+                self.selected = self.selected.saturating_sub(1);
+                Action::Nothing
+            }
+            KeyCode::Down => {
+                self.selected = (self.selected + 1).min(self.count().saturating_sub(1));
+                Action::Nothing
+            }
+            KeyCode::Enter => self.enter(),
             KeyCode::Backspace => {
                 self.query.pop();
+                Action::Nothing
             }
-            KeyCode::Char(character) if views::plain(key) => self.query.push(character),
-            _ => {}
+            KeyCode::Char(character) if views::types_character(key) => {
+                self.query.push(character);
+                Action::Nothing
+            }
+            _ => Action::Nothing,
         }
-
-        Action::Nothing
     }
 
-    /// Enter searches for what's typed, again when that search failed, or
-    /// opens the selected page once the results are for what's typed.
+    /// Show what a search found, unless it was for words searched before the
+    /// last ones.
+    pub fn arrived(&mut self, query: &str, found: anyhow::Result<Vec<Found>>) {
+        if self.searched.as_deref() == Some(query) {
+            self.results = Some(Loading::from(found));
+            self.selected = self.selected.min(self.count().saturating_sub(1));
+        }
+    }
+
+    pub fn bindings(&self) -> Vec<Binding> {
+        let fresh =
+            self.searched.as_deref() == Some(self.query.trim()) && self.found().is_some_and(|it| !it.is_empty());
+
+        if fresh {
+            vec![("↑↓", "select"), ("enter", "open"), ("esc", "close")]
+        } else {
+            vec![("enter", "search"), ("esc", "close")]
+        }
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        let inside = views::large_window(frame, area, &format!(" Search {} ", self.scope));
+
+        let [input, _, results] =
+            Layout::vertical([Constraint::Length(3), Constraint::Length(1), Constraint::Fill(1)]).areas(inside);
+        let field = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        frame.render_widget(
+            Paragraph::new(Line::from(format!("{}▏", self.query))).block(field),
+            input,
+        );
+
+        let lines = self.result_lines(results);
+        frame.render_widget(Paragraph::new(lines), results);
+    }
+
     fn enter(&mut self) -> Action {
         let query = self.query.trim().to_string();
         let failed = matches!(self.results, Some(Loading::Failed(_)));
@@ -76,37 +126,6 @@ impl Search {
                 None => Action::Nothing,
             }
         }
-    }
-
-    /// Show what a search found, unless it was for words searched before the
-    /// last ones.
-    pub fn arrived(&mut self, query: &str, found: anyhow::Result<Vec<Found>>) {
-        if self.searched.as_deref() == Some(query) {
-            self.results = Some(Loading::from(found));
-            let count = self.found().map(<[Found]>::len).unwrap_or(0);
-            self.selected = self.selected.min(count.saturating_sub(1));
-        }
-    }
-
-    pub fn bindings(&self) -> Vec<Binding> {
-        let fresh = self.searched.as_deref() == Some(self.query.trim()) && self.found().is_some_and(|it| !it.is_empty());
-
-        if fresh {
-            vec![("↑↓", "select"), ("enter", "open"), ("esc", "close")]
-        } else {
-            vec![("enter", "search"), ("esc", "close")]
-        }
-    }
-
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let inside = views::large_window(frame, area, &format!(" Search {} ", self.scope));
-
-        let [input, _, results] = Layout::vertical([Constraint::Length(3), Constraint::Length(1), Constraint::Fill(1)]).areas(inside);
-        let field = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::DarkGray)).padding(ratatui::widgets::Padding::horizontal(1));
-        frame.render_widget(Paragraph::new(Line::from(format!("{}▏", self.query))).block(field), input);
-
-        let lines = self.result_lines(results);
-        frame.render_widget(Paragraph::new(lines), results);
     }
 
     fn result_lines(&mut self, area: Rect) -> Vec<Line<'static>> {
@@ -140,10 +159,15 @@ impl Search {
             _ => None,
         }
     }
+
+    fn count(&self) -> usize {
+        match self.found() {
+            Some(found) => found.len(),
+            None => 0,
+        }
+    }
 }
 
-/// "Title: excerpt", or "Book · Title: excerpt" across books, with the
-/// matched words highlighted.
 fn result_line(found: &Found, selected: bool, across_books: bool) -> Line<'static> {
     let marker = Span::from(if selected { "› " } else { "  " }).fg(Color::Blue).bold();
     let title = Span::from(format!("{}: ", found.title)).bold();
@@ -158,13 +182,16 @@ fn result_line(found: &Found, selected: bool, across_books: bool) -> Line<'stati
 
     spans.push(title);
     spans.extend(marked(&found.snippet).into_iter().map(|(text, matched)| {
-        if matched { Span::styled(text, Style::default().fg(Color::Black).bg(Color::Yellow)) } else { Span::from(text) }
+        if matched {
+            Span::styled(text, Style::default().fg(Color::Black).bg(Color::Yellow))
+        } else {
+            Span::from(text)
+        }
     }));
 
     Line::from(spans)
 }
 
-/// The snippet split around Writebook's <mark> tags, as plain text on one line.
 fn marked(snippet: &str) -> Vec<(String, bool)> {
     let flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut parts = Vec::new();
@@ -194,7 +221,13 @@ mod tests {
     }
 
     fn found(title: &str) -> Found {
-        Found { book: "Handbook".to_string(), title: title.to_string(), snippet: String::new(), book_id: Some(2), leaf_id: Some(8) }
+        Found {
+            book: "Handbook".to_string(),
+            title: title.to_string(),
+            snippet: String::new(),
+            book_id: Some(2),
+            leaf_id: Some(8),
+        }
     }
 
     #[test]
@@ -215,7 +248,10 @@ mod tests {
     fn enter_searches_for_new_words_and_opens_a_result_for_the_same_ones() {
         let mut search = Search::new(Some(2), "The Trail Guide".to_string());
 
-        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Nothing), "nothing typed, nothing searched");
+        assert!(
+            matches!(search.key(press(KeyCode::Enter)), Action::Nothing),
+            "nothing typed, nothing searched"
+        );
 
         for character in "rabbit".chars() {
             search.key(press(KeyCode::Char(character)));
@@ -236,7 +272,10 @@ mod tests {
         let mut search = Search::new(Some(2), "The Trail Guide".to_string());
         search.query = "rabbit".to_string();
         search.key(press(KeyCode::Enter));
-        search.arrived("rabbit", Ok(vec![found("Introduction"), found("Getting Around"), found("Maps")]));
+        search.arrived(
+            "rabbit",
+            Ok(vec![found("Introduction"), found("Getting Around"), found("Maps")]),
+        );
         search.key(press(KeyCode::Down));
         search.key(press(KeyCode::Down));
 
@@ -254,7 +293,10 @@ mod tests {
         let mut search = Search::new(None, "every book".to_string());
         search.query = "rabbit".to_string();
         search.key(press(KeyCode::Enter));
-        assert!(matches!(search.key(press(KeyCode::Enter)), Action::Nothing), "still searching");
+        assert!(
+            matches!(search.key(press(KeyCode::Enter)), Action::Nothing),
+            "still searching"
+        );
 
         search.arrived("rabbit", Err(anyhow::anyhow!("offline")));
         assert!(matches!(search.key(press(KeyCode::Enter)), Action::Search(query) if query == "rabbit"));

@@ -5,10 +5,9 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
 
 use super::confirm::{Confirm, Question};
 use super::data::{self, Book, Leaf, LeafContent};
@@ -29,13 +28,11 @@ pub struct LeafPage {
     pub leaves: Vec<Leaf>,
     pub index: usize,
     pub content: Loading<LeafContent>,
-    /// The page's Markdown as rows, for the width they were rendered at.
     rendered: Option<Rendered>,
     pub scroll: usize,
     pub editor: Option<Editor>,
     pub saving: bool,
-    /// How many files are still uploading into the page.
-    uploads: usize,
+    uploads_in_progress: usize,
 }
 
 struct Rendered {
@@ -55,19 +52,6 @@ pub enum Action {
     Notice(&'static str),
 }
 
-/// The book's pages, to jump to one.
-pub struct Index {
-    selected: usize,
-    offset: usize,
-}
-
-pub enum IndexAction {
-    Nothing,
-    Close,
-    /// Another page was turned to; the request loads it.
-    Turned(Request),
-}
-
 impl LeafPage {
     pub fn new(host: String, book_id: u64, book: &Book, index: usize) -> LeafPage {
         LeafPage {
@@ -83,7 +67,7 @@ impl LeafPage {
             scroll: 0,
             editor: None,
             saving: false,
-            uploads: 0,
+            uploads_in_progress: 0,
         }
     }
 
@@ -119,7 +103,9 @@ impl LeafPage {
                 editor::Action::Nothing => Action::Nothing,
                 editor::Action::Save => self.save(),
                 editor::Action::Upload => Action::Upload,
-                editor::Action::Leave if editor.changed() => Action::Overlay(Overlay::Confirm(Confirm::new(Question::Discard))),
+                editor::Action::Leave if editor.changed() => {
+                    Action::Overlay(Overlay::Confirm(Confirm::new(Question::Discard)))
+                }
                 editor::Action::Leave => {
                     self.editor = None;
                     Action::Nothing
@@ -139,64 +125,6 @@ impl LeafPage {
         }
     }
 
-    /// Save the page, once every file uploading into it is in.
-    fn save(&mut self) -> Action {
-        if self.uploads > 0 {
-            return Action::Notice("Wait for the upload to finish, then save.");
-        }
-
-        let (Some(editor), Loading::Ready(content)) = (&self.editor, &self.content) else { return Action::Nothing };
-        let title = editor.title.clone();
-        let body = editor.body();
-        let fingerprint = content.fingerprint.clone();
-        let id = self.id;
-        let host = self.host.clone();
-        let book_id = self.book_id;
-        let leaf = self.leaf().clone();
-        self.saving = true;
-
-        Action::Request(Box::new(move || Message::To(id, Reply::LeafSaved(data::save_leaf(&host, book_id, &leaf, &title, &body, &fingerprint)))))
-    }
-
-    fn read_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Esc => Action::Back,
-            KeyCode::Left if self.index == 0 => Action::Back,
-            KeyCode::Right if self.index + 1 == self.leaves.len() => Action::Back,
-            KeyCode::Left => Action::Request(self.turn_to(self.index - 1)),
-            KeyCode::Right => Action::Request(self.turn_to(self.index + 1)),
-            KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
-            KeyCode::PageUp => self.scroll_by(-20),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_by(20),
-            KeyCode::Home => self.scroll_by(-100_000),
-            KeyCode::Char('e') if self.can_edit_text() => {
-                if let Loading::Ready(content) = &self.content {
-                    self.editor = Some(Editor::new(&content.title, &content.body));
-                }
-                Action::Nothing
-            }
-            KeyCode::Char('d') if self.editable => Action::Overlay(Overlay::Confirm(Confirm::new(Question::DeleteLeaf { book_id: self.book_id, leaf: self.leaf().clone() }))),
-            _ => Action::Nothing,
-        }
-    }
-
-    /// Turn to another page. Returns the request that loads it.
-    fn turn_to(&mut self, index: usize) -> Request {
-        self.id = next_id();
-        self.uploads = 0;
-        self.index = index;
-        self.content = Loading::Pending;
-        self.rendered = None;
-        self.scroll = 0;
-        self.load()
-    }
-
-    fn scroll_by(&mut self, lines: i64) -> Action {
-        self.scroll = (self.scroll as i64 + lines).max(0) as usize;
-        Action::Nothing
-    }
-
     /// After saving, show the page as saved.
     pub fn saved(&mut self, fingerprint: String) {
         if let (Some(editor), Loading::Ready(content)) = (self.editor.take(), &mut self.content) {
@@ -214,38 +142,43 @@ impl LeafPage {
         let record_gid = self.content.ready().and_then(|it| it.record_gid.clone())?;
         let id = self.id;
         let host = self.host.clone();
-        self.uploads += 1;
+        self.uploads_in_progress += 1;
 
-        Some(Box::new(move || Message::To(id, Reply::Uploaded(data::upload(&host, &record_gid, &path)))))
+        Some(Box::new(move || {
+            Message::To(id, Reply::Uploaded(data::upload(&host, &record_gid, &path)))
+        }))
     }
 
     /// An upload is done. Returns the editor its Markdown goes into, if the
     /// page is still being edited.
     pub fn upload_finished(&mut self) -> Option<&mut Editor> {
-        self.uploads -= 1;
+        self.uploads_in_progress -= 1;
         self.editor.as_mut()
     }
 
     /// The images a page shows, to fetch.
     pub fn images(&self) -> Vec<String> {
-        let Loading::Ready(content) = &self.content else { return Vec::new() };
-
-        if self.leaf().is_picture() {
-            return content.image.iter().cloned().collect();
+        match &self.content {
+            Loading::Ready(content) if self.leaf().is_picture() => content.image.iter().cloned().collect(),
+            Loading::Ready(content) => markdown::render(&content.body, 80)
+                .into_iter()
+                .filter_map(|row| match row {
+                    Row::Image { url } => Some(url),
+                    Row::Text(_) => None,
+                })
+                .collect(),
+            _ => Vec::new(),
         }
-
-        markdown::render(&content.body, 80)
-            .into_iter()
-            .filter_map(|row| match row {
-                Row::Image { url } => Some(url),
-                Row::Text(_) => None,
-            })
-            .collect()
     }
 
     pub fn bindings(&self) -> Vec<Binding> {
         if self.editor.is_some() {
-            return vec![("tab", "title or text"), ("esc", "stop editing"), ("ctrl+u", "upload a file"), ("ctrl+s", "save")];
+            return vec![
+                ("tab", "title or text"),
+                ("esc", "stop editing"),
+                ("ctrl+u", "upload a file"),
+                ("ctrl+s", "save"),
+            ];
         }
 
         let mut bindings = vec![("←→", "turn pages"), ("↑↓", "scroll")];
@@ -278,6 +211,80 @@ impl LeafPage {
         self.draw_leaf(frame, area, images);
     }
 
+    pub fn turn_to(&mut self, index: usize) -> Request {
+        self.id = next_id();
+        self.uploads_in_progress = 0;
+        self.index = index;
+        self.content = Loading::Pending;
+        self.rendered = None;
+        self.scroll = 0;
+        self.load()
+    }
+
+    fn save(&mut self) -> Action {
+        if self.uploads_in_progress > 0 {
+            return Action::Notice("Wait for the upload to finish, then save.");
+        }
+
+        if let (Some(editor), Loading::Ready(content)) = (&self.editor, &self.content) {
+            let request = self.save_request(editor, content);
+            self.saving = true;
+            request
+        } else {
+            Action::Nothing
+        }
+    }
+
+    fn save_request(&self, editor: &Editor, content: &LeafContent) -> Action {
+        let title = editor.title.clone();
+        let body = editor.body();
+        let fingerprint = content.fingerprint.clone();
+        let id = self.id;
+        let host = self.host.clone();
+        let book_id = self.book_id;
+        let leaf = self.leaf().clone();
+
+        Action::Request(Box::new(move || {
+            Message::To(
+                id,
+                Reply::LeafSaved(data::save_leaf(&host, book_id, &leaf, &title, &body, &fingerprint)),
+            )
+        }))
+    }
+
+    fn read_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::Back,
+            KeyCode::Left if self.index == 0 => Action::Back,
+            KeyCode::Right if self.index + 1 == self.leaves.len() => Action::Back,
+            KeyCode::Left => Action::Request(self.turn_to(self.index - 1)),
+            KeyCode::Right => Action::Request(self.turn_to(self.index + 1)),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
+            KeyCode::PageUp => self.scroll_by(-20),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_by(20),
+            KeyCode::Home => self.scroll_by(-100_000),
+            KeyCode::Char('e') if self.can_edit_text() => {
+                if let Loading::Ready(content) = &self.content {
+                    self.editor = Some(Editor::new(&content.title, &content.body));
+                }
+                Action::Nothing
+            }
+            KeyCode::Char('d') if self.editable => {
+                Action::Overlay(Overlay::Confirm(Confirm::new(Question::DeleteLeaf {
+                    book_id: self.book_id,
+                    leaf: self.leaf().clone(),
+                })))
+            }
+            _ => Action::Nothing,
+        }
+    }
+
+    fn scroll_by(&mut self, lines: i64) -> Action {
+        self.scroll = (self.scroll as i64 + lines).max(0) as usize;
+        Action::Nothing
+    }
+
     fn draw_leaf(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
         if let Some(editor) = &mut self.editor {
             return editor.draw(frame, area);
@@ -295,7 +302,10 @@ impl LeafPage {
                     self.scroll = draw_section(frame, column, content, self.scroll);
                 } else {
                     if self.rendered.as_ref().is_none_or(|it| it.width != column.width) {
-                        self.rendered = Some(Rendered { width: column.width, rows: markdown::render(&content.body, column.width) });
+                        self.rendered = Some(Rendered {
+                            width: column.width,
+                            rows: markdown::render(&content.body, column.width),
+                        });
                     }
 
                     if let Some(rendered) = &self.rendered {
@@ -304,15 +314,20 @@ impl LeafPage {
                 }
 
                 let position = format!("{} of {}", self.index + 1, self.leaves.len());
-                let corner = Rect { y: area.bottom().saturating_sub(1), height: 1, ..area };
-                frame.render_widget(Paragraph::new(Line::from(position).dim()).alignment(Alignment::Right), corner);
+                let corner = Rect {
+                    y: area.bottom().saturating_sub(1),
+                    height: 1,
+                    ..area
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(position).dim()).alignment(Alignment::Right),
+                    corner,
+                );
             }
         }
     }
 }
 
-/// Draw the page's rows scrolled down by `scroll` lines, as far as they go.
-/// Returns the scroll, kept from going past the end.
 fn draw_rows(frame: &mut Frame, area: Rect, host: &str, rows: &[Row], scroll: usize, images: &mut Images) -> usize {
     let image_height = markdown::IMAGE_HEIGHT.min(area.height);
     let heights: Vec<u16> = rows.iter().map(|it| row_height(it, image_height)).collect();
@@ -320,7 +335,11 @@ fn draw_rows(frame: &mut Frame, area: Rect, host: &str, rows: &[Row], scroll: us
     let scroll = scroll.min(total.saturating_sub(usize::from(area.height)));
 
     for shown in visible_rows(&heights, scroll, usize::from(area.height)) {
-        let room = Rect { y: area.y + shown.y as u16, height: shown.height as u16, ..area };
+        let room = Rect {
+            y: area.y + shown.y as u16,
+            height: shown.height as u16,
+            ..area
+        };
 
         match &rows[shown.index] {
             Row::Text(line) => frame.render_widget(Paragraph::new(line.clone()), room),
@@ -336,8 +355,6 @@ fn draw_rows(frame: &mut Frame, area: Rect, host: &str, rows: &[Row], scroll: us
     scroll
 }
 
-/// A row with some of it on the screen: which row, the line it starts on,
-/// and how many of its lines show.
 #[derive(Debug, PartialEq)]
 struct Shown {
     index: usize,
@@ -345,8 +362,6 @@ struct Shown {
     height: usize,
 }
 
-/// The rows of these heights that show in `height` lines scrolled down by
-/// `scroll`, a row cut off at the top taking only the lines left of it.
 fn visible_rows(heights: &[u16], scroll: usize, height: usize) -> Vec<Shown> {
     let mut shown = Vec::new();
     let mut top = 0;
@@ -357,7 +372,11 @@ fn visible_rows(heights: &[u16], scroll: usize, height: usize) -> Vec<Shown> {
         if bottom > scroll && top < scroll + height {
             let y = top.saturating_sub(scroll);
             let visible = bottom.min(scroll + height) - top.max(scroll);
-            shown.push(Shown { index, y, height: visible });
+            shown.push(Shown {
+                index,
+                y,
+                height: visible,
+            });
         }
 
         top = bottom;
@@ -367,104 +386,90 @@ fn visible_rows(heights: &[u16], scroll: usize, height: usize) -> Vec<Shown> {
 }
 
 fn draw_picture(frame: &mut Frame, area: Rect, host: &str, content: &LeafContent, images: &mut Images) {
-    let picture = Rect { height: area.height.saturating_sub(3), ..area };
+    let picture = Rect {
+        height: area.height.saturating_sub(3),
+        ..area
+    };
     let shown = match &content.image {
         Some(url) => images.draw(frame, centered_image(picture), &Source::remote(host, url)),
         None => false,
     };
 
     if !shown {
-        frame.render_widget(Paragraph::new(Line::from("Loading the picture…").dim()).alignment(Alignment::Center), Rect { y: picture.y + picture.height / 2, height: 1, ..picture });
+        frame.render_widget(
+            Paragraph::new(Line::from("Loading the picture…").dim()).alignment(Alignment::Center),
+            Rect {
+                y: picture.y + picture.height / 2,
+                height: 1,
+                ..picture
+            },
+        );
     }
 
-    let caption = Rect { y: area.bottom().saturating_sub(2), height: 1, ..area };
-    frame.render_widget(Paragraph::new(Line::from(content.body.clone()).italic()).alignment(Alignment::Center), caption);
+    let caption = Rect {
+        y: area.bottom().saturating_sub(2),
+        height: 1,
+        ..area
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(content.body.clone()).italic()).alignment(Alignment::Center),
+        caption,
+    );
 }
 
-/// A section's text in the middle of the screen, or scrolled like a page
-/// when it's taller than the screen. Returns the scroll, kept from going past
-/// the end.
 fn draw_section(frame: &mut Frame, area: Rect, content: &LeafContent, scroll: usize) -> usize {
     let lines: Vec<Line> = content
         .body
         .lines()
-        .flat_map(|line| markdown::wrap(vec![Span::raw(line.trim().to_string())], usize::from(area.width), "", ""))
+        .flat_map(|line| {
+            markdown::wrap(
+                vec![Span::raw(line.trim().to_string())],
+                usize::from(area.width),
+                "",
+                "",
+            )
+        })
         .map(|line| Line::from(line.to_string().trim_end().to_string()))
         .collect();
     let height = lines.len() + 2;
 
     if height <= usize::from(area.height) {
-        let middle = Rect { y: area.y + (area.height - height as u16) / 2, height: height as u16, ..area };
+        let middle = Rect {
+            y: area.y + (area.height - height as u16) / 2,
+            height: height as u16,
+            ..area
+        };
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), middle);
         0
     } else {
         let scroll = scroll.min(height - usize::from(area.height));
-        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center).scroll((scroll as u16, 0)), area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .alignment(Alignment::Center)
+                .scroll((scroll as u16, 0)),
+            area,
+        );
         scroll
     }
 }
 
-impl Index {
-    /// Opens on the page being read.
-    pub fn new(page: &LeafPage) -> Index {
-        Index { selected: page.index, offset: 0 }
-    }
-
-    pub fn key(&mut self, key: KeyEvent, page: &mut LeafPage) -> IndexAction {
-        match key.code {
-            KeyCode::Esc => return IndexAction::Close,
-            KeyCode::Enter if self.selected == page.index => return IndexAction::Close,
-            KeyCode::Enter => return IndexAction::Turned(page.turn_to(self.selected)),
-            KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => self.selected = (self.selected + 1).min(page.leaves.len().saturating_sub(1)),
-            _ => {}
-        }
-
-        IndexAction::Nothing
-    }
-
-    pub fn bindings(&self) -> Vec<Binding> {
-        vec![("↑↓", "select"), ("enter", "go to page"), ("esc", "close")]
-    }
-
-    /// The book's index: its pages, sections in bold, the current one
-    /// marked, as many as fit around the selected one.
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect, page: &LeafPage) {
-        let selected = self.selected;
-        let width = 50.min(area.width);
-        let mut lines = vec![Line::from(page.book_title.clone()).bold(), Line::default()];
-        let fit = usize::from(area.height.saturating_sub(6)).max(1);
-        views::scroll_into_view(&mut self.offset, selected, fit);
-
-        for (index, leaf) in page.leaves.iter().enumerate().skip(self.offset).take(fit) {
-            let title = if leaf.title.is_empty() { "Untitled".to_string() } else { leaf.title.clone() };
-            let marker = if index == selected { "› " } else { "  " };
-            let dots = ".".repeat(usize::from(width).saturating_sub(title.width() + 5));
-            let style = if leaf.is_section() { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
-            let style = if index == selected { style.fg(Color::Blue).add_modifier(Modifier::BOLD) } else { style };
-            let here = if index == page.index { " ◂" } else { "" };
-
-            lines.push(Line::from(vec![
-                ratatui::text::Span::styled(format!("{marker}{title} "), style),
-                ratatui::text::Span::from(dots).fg(Color::DarkGray),
-                ratatui::text::Span::from(here).fg(Color::Blue),
-            ]));
-        }
-
-        views::window(frame, area, " Index ", lines, width + 4);
-    }
-}
-
-/// Text reads best in a column about as wide as a printed page.
 fn reading_column(area: Rect) -> Rect {
     let width = area.width.min(84);
-    Rect { x: area.x + (area.width - width) / 2, width, height: area.height.saturating_sub(1), ..area }
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        width,
+        height: area.height.saturating_sub(1),
+        ..area
+    }
 }
 
-/// A picture gets the middle of the screen, as wide as it can be.
 fn centered_image(area: Rect) -> Rect {
     let width = area.width.min(area.height.saturating_mul(3));
-    Rect { x: area.x + (area.width - width) / 2, width, ..area }
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        width,
+        ..area
+    }
 }
 
 fn row_height(row: &Row, image_height: u16) -> u16 {
@@ -477,12 +482,20 @@ fn row_height(row: &Row, image_height: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::index::Index;
     use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     fn page(body: &str) -> LeafPage {
-        let leaf = Leaf { id: 1, kind: "Page".to_string(), title: "On call".to_string(), word_count: None, preview: None, image: None };
+        let leaf = Leaf {
+            id: 1,
+            kind: "Page".to_string(),
+            title: "On call".to_string(),
+            word_count: None,
+            preview: None,
+            image: None,
+        };
         let book = Book {
             id: 1,
             title: "Handbook".to_string(),
@@ -496,21 +509,38 @@ mod tests {
             leaves: vec![leaf],
         };
         let mut page = LeafPage::new("https://books.example.com".to_string(), 1, &book, 0);
-        page.loaded(Ok(LeafContent { title: "On call".to_string(), body: body.to_string(), image: None, fingerprint: "f1".to_string(), record_gid: None }));
+        page.loaded(Ok(LeafContent {
+            title: "On call".to_string(),
+            body: body.to_string(),
+            image: None,
+            fingerprint: "f1".to_string(),
+            record_gid: None,
+        }));
         page
     }
 
     fn drawn(page: &mut LeafPage) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
         let mut images = Images::none();
-        terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images)).unwrap();
+        terminal
+            .draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images))
+            .unwrap();
         views::screen_text(&terminal)
     }
 
     #[test]
     fn the_index_keeps_the_selected_page_in_view() {
         let mut page = page("");
-        page.leaves = (1..=40).map(|id| Leaf { id, kind: "Page".to_string(), title: format!("Page {id}"), word_count: None, preview: None, image: None }).collect();
+        page.leaves = (1..=40)
+            .map(|id| Leaf {
+                id,
+                kind: "Page".to_string(),
+                title: format!("Page {id}"),
+                word_count: None,
+                preview: None,
+                image: None,
+            })
+            .collect();
         page.index = 39;
         let mut index = Index::new(&page);
 
@@ -532,19 +562,33 @@ mod tests {
         let mut page = page("![Diagram](/u/diagram.png)");
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
         let mut images = Images::none();
-        terminal.draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images)).unwrap();
+        terminal
+            .draw(|frame| page.draw(frame, frame.area(), "books.example.com", &mut images))
+            .unwrap();
 
-        assert!(views::screen_text(&terminal).iter().any(|it| it.trim() == "Loading the picture…"));
+        assert!(
+            views::screen_text(&terminal)
+                .iter()
+                .any(|it| it.trim() == "Loading the picture…")
+        );
     }
 
     #[test]
     fn a_section_taller_than_the_screen_wraps_and_scrolls() {
         let mut page = page(&"Part one of the handbook covers everything about being on call. ".repeat(8));
         page.leaves[0].kind = "Section".to_string();
-        assert!(drawn(&mut page).iter().any(|it| it.trim() == "Part one of the handbook covers"));
+        assert!(
+            drawn(&mut page)
+                .iter()
+                .any(|it| it.trim() == "Part one of the handbook covers")
+        );
 
         page.scroll = usize::MAX;
-        assert!(drawn(&mut page).iter().any(|it| it.trim() == "covers everything about being on call."));
+        assert!(
+            drawn(&mut page)
+                .iter()
+                .any(|it| it.trim() == "covers everything about being on call.")
+        );
     }
 
     #[test]

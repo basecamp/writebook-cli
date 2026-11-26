@@ -18,13 +18,14 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use super::{
-    Access, CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, config_dir, credentials_from, ensure_private_connection, error_description, now,
-    post_token_request, request_device_authorization, revoke, someone_can_approve, storage, string_field,
+    Access, CLIENT_ID, Credentials, DEVICE_CODE_GRANT_TYPE, config_dir, credentials_from, ensure_private_connection,
+    error_description, now, post_token_request, request_device_authorization, revoke, someone_can_approve, storage,
+    string_field,
 };
 use crate::{fsutil, inventory};
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Pending {
+struct PendingSignIn {
     device_code: String,
     user_code: String,
     link: String,
@@ -35,12 +36,11 @@ struct Pending {
 }
 
 #[derive(Serialize, Deserialize, Default)]
-struct PendingFile {
+struct PendingSignIns {
     #[serde(default)]
-    sign_ins: BTreeMap<String, Pending>,
+    sign_ins: BTreeMap<String, PendingSignIn>,
 }
 
-/// What came back from trying an approval code.
 enum Attempt {
     SignedIn(Credentials),
     WrongCode,
@@ -52,13 +52,14 @@ enum Attempt {
 /// is done.
 /// The access asked for is remembered with a pending sign-in, so finishing
 /// one with the approval code needs only the code.
+/// A read-only sign-in that comes back with more access is revoked, not kept.
 pub fn sign_in(host: &str, profile: &str, code: Option<&str>, access: Access) -> Result<bool> {
     ensure_private_connection(host)?;
 
     match code {
-        Some(code) => finish_pending(host, profile, code).map(|_| true),
+        Some(code) => finish_with_code(host, profile, code).map(|_| true),
         None if someone_can_approve() => at_terminal(host, profile, access).map(|_| true),
-        None => start_pending(host, profile, access).map(|_| false),
+        None => start_in_two_steps(host, profile, access).map(|_| false),
     }
 }
 
@@ -86,38 +87,14 @@ pub(super) fn at_terminal(host: &str, profile: &str, access: Access) -> Result<C
         let host = host.to_string();
         let pending = pending.clone();
         std::thread::spawn(move || {
-            let _ = sender.send(poll_until_approved(&host, &pending));
+            send_unless_settled(&sender, poll_until_approved(&host, &pending));
         });
     }
 
     {
         let host = host.to_string();
         let pending = pending.clone();
-        std::thread::spawn(move || {
-            for line in std::io::stdin().lock().lines() {
-                let Ok(line) = line else { break };
-                let code = line.trim();
-
-                if code.is_empty() {
-                    continue;
-                }
-
-                match try_code(&host, &pending, code) {
-                    Ok(Attempt::SignedIn(credentials)) => {
-                        let _ = sender.send(Ok(credentials));
-                        return;
-                    }
-                    Ok(Attempt::WrongCode) => eprintln!("That code doesn't match. Check it and type it again:"),
-                    Ok(Attempt::NotApprovedYet) => {
-                        eprintln!("Writebook hasn't seen the approval yet. Approve at the link first, then type the code:")
-                    }
-                    Err(error) => {
-                        let _ = sender.send(Err(error));
-                        return;
-                    }
-                }
-            }
-        });
+        std::thread::spawn(move || read_typed_codes(&host, &pending, &sender));
     }
 
     let credentials = receiver.recv().context("sign-in stopped unexpectedly")??;
@@ -126,19 +103,47 @@ pub(super) fn at_terminal(host: &str, profile: &str, access: Access) -> Result<C
     Ok(credentials)
 }
 
-/// Step one without a terminal: print the link and remember the sign-in.
-fn start_pending(host: &str, profile: &str, access: Access) -> Result<()> {
+fn read_typed_codes(host: &str, pending: &PendingSignIn, sender: &mpsc::Sender<Result<Credentials>>) {
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        let code = line.trim();
+
+        if code.is_empty() {
+            continue;
+        }
+
+        match try_code(host, pending, code) {
+            Ok(Attempt::SignedIn(credentials)) => {
+                send_unless_settled(sender, Ok(credentials));
+                return;
+            }
+            Ok(Attempt::WrongCode) => eprintln!("That code doesn't match. Check it and type it again:"),
+            Ok(Attempt::NotApprovedYet) => {
+                eprintln!("Writebook hasn't seen the approval yet. Approve at the link first, then type the code:")
+            }
+            Err(error) => {
+                send_unless_settled(sender, Err(error));
+                return;
+            }
+        }
+    }
+}
+
+fn start_in_two_steps(host: &str, profile: &str, access: Access) -> Result<()> {
     let pending = start(host, access)?;
 
     let mut file = load_pending()?;
     file.sign_ins.insert(pending_key(host, profile), pending.clone());
-    fsutil::write_json_privately(&pending_path()?, &file)?;
+    save_pending(&file)?;
 
     let minutes = pending.expires_at.saturating_sub(now()).div_ceil(60);
 
     println!("To sign in to {host}:");
     println!();
-    println!("  1. Open {} on any device, check that it shows the code {}, and approve it.", pending.link, pending.user_code);
+    println!(
+        "  1. Open {} on any device, check that it shows the code {}, and approve it.",
+        pending.link, pending.user_code
+    );
     println!("  2. Writebook then shows an approval code. Finish by running the same command again with:");
     println!();
     println!("     --code <approval code>");
@@ -147,26 +152,32 @@ fn start_pending(host: &str, profile: &str, access: Access) -> Result<()> {
     Ok(())
 }
 
-/// Step two without a terminal: trade the approval code for a sign-in.
-fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
+fn finish_with_code(host: &str, profile: &str, code: &str) -> Result<()> {
     let mut file = load_pending()?;
     let key = pending_key(host, profile);
 
-    let Some(pending) = file.sign_ins.get(&key).cloned() else {
-        bail!("no sign-in to {host} is waiting for a code. Start one with `{}`", inventory::sign_in_command(host, profile));
+    let pending = match file.sign_ins.get(&key).cloned() {
+        Some(pending) => pending,
+        None => bail!(
+            "no sign-in to {host} is waiting for a code. Start one with `{}`",
+            inventory::sign_in_command(host, profile)
+        ),
     };
 
     if pending.expires_at <= now() {
         file.sign_ins.remove(&key);
-        fsutil::write_json_privately(&pending_path()?, &file)?;
-        bail!("the sign-in link for {host} has expired. Start again with `{}`", super::sign_in_command(host, profile, pending.access));
+        save_pending(&file)?;
+        bail!(
+            "the sign-in link for {host} has expired. Start again with `{}`",
+            super::sign_in_command(host, profile, pending.access)
+        );
     }
 
     match try_code(host, &pending, code.trim())? {
         Attempt::SignedIn(credentials) => {
             storage::save(host, profile, &credentials)?;
             file.sign_ins.remove(&key);
-            fsutil::write_json_privately(&pending_path()?, &file)?;
+            save_pending(&file)?;
             println!("Signed in to {host}.");
             Ok(())
         }
@@ -175,7 +186,7 @@ fn finish_pending(host: &str, profile: &str, code: &str) -> Result<()> {
     }
 }
 
-fn start(host: &str, access: Access) -> Result<Pending> {
+fn start(host: &str, access: Access) -> Result<PendingSignIn> {
     let authorization = request_device_authorization(host, access)?;
     let user_code = string_field(&authorization, "user_code")?;
     let link = string_field(&authorization, "verification_uri_complete")?;
@@ -194,7 +205,7 @@ fn start(host: &str, access: Access) -> Result<Pending> {
         bail!("{host} sent a sign-in link with control characters in it, so it wasn't opened: {link:?}");
     }
 
-    Ok(Pending {
+    Ok(PendingSignIn {
         device_code: string_field(&authorization, "device_code")?,
         user_code,
         link,
@@ -204,7 +215,7 @@ fn start(host: &str, access: Access) -> Result<Pending> {
     })
 }
 
-fn try_code(host: &str, pending: &Pending, code: &str) -> Result<Attempt> {
+fn try_code(host: &str, pending: &PendingSignIn, code: &str) -> Result<Attempt> {
     let (status, body) = post_token_request(
         host,
         &[
@@ -216,19 +227,19 @@ fn try_code(host: &str, pending: &Pending, code: &str) -> Result<Attempt> {
     )?;
 
     if status == 200 {
-        return Ok(Attempt::SignedIn(granted(host, pending, credentials_from(&body)?)?));
-    }
-
-    match body["error"].as_str() {
-        Some("invalid_grant") => Ok(Attempt::WrongCode),
-        // A Writebook without approval codes ignores the code and answers as
-        // it would a poll.
-        Some("authorization_pending" | "slow_down") => Ok(Attempt::NotApprovedYet),
-        _ => Err(sign_in_error(&body)),
+        Ok(Attempt::SignedIn(granted(host, pending, credentials_from(&body)?)?))
+    } else {
+        match body["error"].as_str() {
+            Some("invalid_grant") => Ok(Attempt::WrongCode),
+            // A Writebook without approval codes ignores the code and answers as
+            // it would a poll.
+            Some("authorization_pending" | "slow_down") => Ok(Attempt::NotApprovedYet),
+            _ => Err(sign_in_error(&body)),
+        }
     }
 }
 
-fn poll_until_approved(host: &str, pending: &Pending) -> Result<Credentials> {
+fn poll_until_approved(host: &str, pending: &PendingSignIn) -> Result<Credentials> {
     let mut interval = pending.interval;
 
     loop {
@@ -249,31 +260,30 @@ fn poll_until_approved(host: &str, pending: &Pending) -> Result<Credentials> {
 
         if status == 200 {
             return granted(host, pending, credentials_from(&body)?);
-        }
-
-        match body["error"].as_str() {
-            Some("authorization_pending") => {}
-            Some("slow_down") => interval += 5,
-            Some("invalid_grant") => {
-                // Most likely a typed approval code just used this sign-in;
-                // give that answer the chance to arrive first.
-                std::thread::sleep(Duration::from_secs(2));
-                return Err(sign_in_error(&body));
+        } else {
+            match body["error"].as_str() {
+                Some("authorization_pending") => {}
+                Some("slow_down") => interval += 5,
+                Some("invalid_grant") => {
+                    // A typed approval code probably just used this sign-in, so give
+                    // that answer the chance to arrive first.
+                    std::thread::sleep(Duration::from_secs(2));
+                    return Err(sign_in_error(&body));
+                }
+                _ => return Err(sign_in_error(&body)),
             }
-            _ => return Err(sign_in_error(&body)),
         }
     }
 }
 
-/// A Writebook from before read-only sign-ins ignores the ask and gives full
-/// access. That sign-in is revoked rather than kept with more access than
-/// was asked for.
-fn granted(host: &str, pending: &Pending, credentials: Credentials) -> Result<Credentials> {
+fn granted(host: &str, pending: &PendingSignIn, credentials: Credentials) -> Result<Credentials> {
     if pending.access == Access::ReadOnly && credentials.access != Access::ReadOnly {
         if let Err(error) = revoke(host, &credentials) {
             eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#})");
         }
-        bail!("{host} can't make read-only sign-ins yet, so you weren't signed in. Update Writebook, or sign in without --read-only");
+        bail!(
+            "{host} can't make read-only sign-ins yet, so you weren't signed in. Update Writebook, or sign in without --read-only"
+        );
     }
 
     Ok(credentials)
@@ -287,14 +297,14 @@ fn sign_in_error(body: &Value) -> anyhow::Error {
     }
 }
 
-/// Whether a browser could open here at all. Over SSH or on a server there is
-/// nothing to open, and the printed link is the way in.
 fn has_display() -> bool {
     if cfg!(any(target_os = "macos", windows)) {
-        return std::env::var_os("SSH_CONNECTION").is_none();
+        std::env::var_os("SSH_CONNECTION").is_none()
+    } else {
+        ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
     }
-
-    ["DISPLAY", "WAYLAND_DISPLAY"].iter().any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 fn open_in_browser(url: &str) {
@@ -308,7 +318,7 @@ fn open_in_browser(url: &str) {
         std::process::Command::new("xdg-open")
     };
 
-    let _ = command
+    let spawned = command
         .arg(url)
         .env_remove("WRITEBOOK_TOKEN")
         .env_remove("WRITEBOOK_TOKEN_HOST")
@@ -316,15 +326,28 @@ fn open_in_browser(url: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+
+    match spawned {
+        Ok(_child) => {}
+        Err(_error) => {}
+    }
 }
 
-/// Drop a sign-in that was started but never finished.
+fn send_unless_settled(sender: &mpsc::Sender<Result<Credentials>>, outcome: Result<Credentials>) {
+    match sender.send(outcome) {
+        Ok(()) => {}
+        Err(mpsc::SendError(_outcome)) => {}
+    }
+}
+
+/// Drop a sign-in that was started and not finished.
 pub(super) fn forget_pending(host: &str, profile: &str) -> Result<()> {
     forget_pending_where(|key| key == pending_key(host, profile))
 }
 
-/// Drop every sign-in to a site that was started but never finished.
-pub(super) fn forget_all_pending(host: &str) -> Result<()> {
+/// Drop the sign-ins to a site that were started and not finished, for
+/// any profile.
+pub fn forget_unfinished_sign_ins(host: &str) -> Result<()> {
     forget_pending_where(|key| key.starts_with(&pending_key(host, "")))
 }
 
@@ -334,7 +357,7 @@ fn forget_pending_where(matches: impl Fn(&str) -> bool) -> Result<()> {
     file.sign_ins.retain(|key, _| !matches(key));
 
     if file.sign_ins.len() != before {
-        fsutil::write_json_privately(&pending_path()?, &file)?;
+        save_pending(&file)?;
     }
 
     Ok(())
@@ -344,15 +367,19 @@ fn pending_key(host: &str, profile: &str) -> String {
     format!("{host} {profile}")
 }
 
-fn load_pending() -> Result<PendingFile> {
+fn load_pending() -> Result<PendingSignIns> {
     let path = pending_path()?;
 
     if path.exists() {
         let contents = fsutil::read_to_string(&path)?;
         serde_json::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))
     } else {
-        Ok(PendingFile::default())
+        Ok(PendingSignIns::default())
     }
+}
+
+fn save_pending(file: &PendingSignIns) -> Result<()> {
+    fsutil::write_json_privately(&pending_path()?, file)
 }
 
 fn pending_path() -> Result<PathBuf> {

@@ -7,15 +7,15 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::book::{self, BookPage};
+use super::book_form::{self, BookFormPage};
 use super::books::{self, Books};
 use super::confirm::{Confirm, Question};
-use super::data::{Book, BookCard, BookForm, LeafContent, People, Profile};
-use super::edit::{self, EditPage};
+use super::data::{Book, BookForm, LeafContent, Library, People, Profile};
 use super::help::Binding;
 use super::instances::{self, InstancePicker};
+use super::leaf::{self, LeafPage};
 use super::profile::{self, ProfilePage};
 use super::publishing::Publishing;
-use super::reader::{self, LeafPage};
 use super::search::Search;
 use super::settings::{self, SettingsPage};
 use super::views::{self, View};
@@ -25,7 +25,7 @@ use super::{App, Id, Loading, Overlay, Purpose, Screen, files};
 pub enum Target<'a> {
     Books(&'a mut Books),
     Book(&'a mut BookPage),
-    Edit(&'a mut EditPage),
+    BookForm(&'a mut BookFormPage),
     Leaf(&'a mut LeafPage),
     Settings(&'a mut SettingsPage),
     Profile(&'a mut ProfilePage),
@@ -40,9 +40,9 @@ impl Screen {
             Screen::Instances(_) => None,
             Screen::Books(books) => find_books(books, id),
             Screen::Book(page) => find_book(page, id),
-            Screen::Edit(page, back) => {
+            Screen::BookForm(page, back) => {
                 if page.id == id {
-                    Some(Target::Edit(page))
+                    Some(Target::BookForm(page))
                 } else {
                     back.find(id)
                 }
@@ -76,7 +76,7 @@ impl Screen {
             Screen::Instances(_) => None,
             Screen::Books(screen) => Some(&screen.host),
             Screen::Book(screen) => Some(&screen.host),
-            Screen::Edit(page, _) => Some(&page.host),
+            Screen::BookForm(page, _) => Some(&page.host),
             Screen::Leaf(page, _) => Some(&page.host),
             Screen::Settings(page, _) => Some(&page.host),
             Screen::Profile(page, _) => Some(&page.host),
@@ -86,7 +86,7 @@ impl Screen {
     /// Whether keys go into a text field, where ? is just a character.
     pub fn typing(&self) -> bool {
         match self {
-            Screen::Edit(page, _) => page.typing(),
+            Screen::BookForm(page, _) => page.typing(),
             Screen::Leaf(page, _) => page.editor.is_some(),
             Screen::Profile(page, _) => page.typing(),
             _ => false,
@@ -99,7 +99,7 @@ impl Screen {
     pub fn opens_instances(&self, key: KeyEvent) -> bool {
         match self {
             Screen::Instances(_) | Screen::Leaf(..) => false,
-            Screen::Edit(..) | Screen::Profile(..) => key.code != KeyCode::Tab,
+            Screen::BookForm(..) | Screen::Profile(..) => key.code != KeyCode::Tab,
             Screen::Book(screen) => !screen.moving(),
             Screen::Books(_) | Screen::Settings(..) => true,
         }
@@ -110,7 +110,7 @@ impl Screen {
             Screen::Instances(picker) => picker.bindings(),
             Screen::Books(screen) => screen.bindings(books_view),
             Screen::Book(screen) => screen.bindings(book_view),
-            Screen::Edit(page, _) => page.bindings(),
+            Screen::BookForm(page, _) => page.bindings(),
             Screen::Leaf(page, _) => page.bindings(),
             Screen::Settings(page, _) => page.bindings(),
             Screen::Profile(page, _) => page.bindings(),
@@ -132,12 +132,12 @@ impl App {
             Screen::Instances(picker) => picker.draw(frame, area, &self.instances),
             Screen::Books(screen) => screen.draw(frame, area, self.books_view, &mut self.images),
             Screen::Book(screen) => screen.draw(frame, area, self.book_view, &mut self.images),
-            Screen::Edit(page, _) => page.draw(frame, area, &mut self.images),
-            Screen::Leaf(page, book) => page.draw(frame, area, &book.books.name, &mut self.images),
-            Screen::Settings(page, books) => page.draw(frame, area, &books.name),
+            Screen::BookForm(page, _) => page.draw(frame, area, &mut self.images),
+            Screen::Leaf(page, book) => page.draw(frame, area, &book.books.instance_name, &mut self.images),
+            Screen::Settings(page, books) => page.draw(frame, area, &books.instance_name),
             Screen::Profile(page, back) => {
                 let instance = match back.as_ref() {
-                    Screen::Settings(_, books) => books.name.as_str(),
+                    Screen::Settings(_, books) => books.instance_name.as_str(),
                     _ => "",
                 };
                 page.draw(frame, area, instance);
@@ -148,7 +148,7 @@ impl App {
     pub fn screen_key(&mut self, key: KeyEvent) {
         match &mut self.screen {
             Screen::Instances(picker) => {
-                let count = self.instances.ready().map(Vec::len).unwrap_or(0);
+                let count = self.instances.count(Vec::len);
 
                 if let instances::Action::Open(index) = picker.key(key, count) {
                     self.open_instance(index);
@@ -156,10 +156,12 @@ impl App {
             }
             Screen::Books(screen) => match screen.key(key) {
                 books::Action::Nothing => {}
-                books::Action::Back => self.screen = Screen::Instances(InstancePicker::new(self.current_instance())),
+                books::Action::Back => {
+                    self.screen = Screen::Instances(InstancePicker::new(self.current_instance_index()))
+                }
                 books::Action::Open(book_id) => self.open_book(book_id),
                 books::Action::ToggleView => self.books_view = self.books_view.toggled(),
-                books::Action::NewBook => self.open_editor(None),
+                books::Action::NewBook => self.open_book_form(None),
                 books::Action::Settings => self.open_settings(),
                 books::Action::Overlay(overlay) => self.overlay = Some(overlay),
             },
@@ -168,37 +170,47 @@ impl App {
                 book::Action::Back => self.close_book(),
                 book::Action::OpenLeaf => self.open_leaf(),
                 book::Action::ToggleView => self.book_view = self.book_view.toggled(),
-                book::Action::EditBook(book_id) => self.open_editor(Some(book_id)),
+                book::Action::EditBook(book_id) => self.open_book_form(Some(book_id)),
                 book::Action::Overlay(overlay) => self.overlay = Some(overlay),
                 book::Action::Request(request) => self.spawn(request),
             },
-            Screen::Edit(page, _) => match page.key(key) {
-                edit::Action::Nothing => {}
-                edit::Action::Cancel => self.close_editor(false),
-                edit::Action::Save => {
+            Screen::BookForm(page, _) => match page.key(key) {
+                book_form::Action::Nothing => {}
+                book_form::Action::Cancel => self.close_book_form(false),
+                book_form::Action::Save => {
                     if let Some(problem) = page.problem() {
                         self.notice = Some(problem.to_string());
                     } else if let Some(request) = page.save() {
                         self.spawn(request);
                     }
                 }
-                edit::Action::Delete(book_id, title) => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::DeleteBook { book_id, title }))),
-                edit::Action::ChooseCover => self.overlay = Some(self.file_picker("Choose a cover", files::IMAGES, Purpose::Cover)),
+                book_form::Action::Delete(book_id, title) => {
+                    self.overlay = Some(Overlay::Confirm(Confirm::new(Question::DeleteBook { book_id, title })))
+                }
+                book_form::Action::ChooseCover => {
+                    self.overlay = Some(self.file_picker("Choose a cover", files::IMAGES, Purpose::Cover))
+                }
             },
             Screen::Leaf(page, _) => match page.key(key) {
-                reader::Action::Nothing => {}
-                reader::Action::Back => self.close_leaf(),
-                reader::Action::Upload => self.overlay = Some(self.file_picker("Upload a file", files::ANY, Purpose::Upload)),
-                reader::Action::Overlay(overlay) => self.overlay = Some(overlay),
-                reader::Action::Request(request) => self.spawn(request),
-                reader::Action::Notice(notice) => self.notice = Some(notice.to_string()),
+                leaf::Action::Nothing => {}
+                leaf::Action::Back => self.close_leaf(),
+                leaf::Action::Upload => {
+                    self.overlay = Some(self.file_picker("Upload a file", files::ANY, Purpose::Upload))
+                }
+                leaf::Action::Overlay(overlay) => self.overlay = Some(overlay),
+                leaf::Action::Request(request) => self.spawn(request),
+                leaf::Action::Notice(notice) => self.notice = Some(notice.to_string()),
             },
             Screen::Settings(page, _) => match page.key(key) {
                 settings::Action::Nothing => {}
                 settings::Action::Back => self.close_settings(),
-                settings::Action::Copy(url) => self.copy(url),
-                settings::Action::ResetInvite => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::ResetInvite))),
-                settings::Action::Remove(person) => self.overlay = Some(Overlay::Confirm(Confirm::new(Question::RemovePerson(person)))),
+                settings::Action::Copy(url) => self.copy_link(url),
+                settings::Action::ResetInvite => {
+                    self.overlay = Some(Overlay::Confirm(Confirm::new(Question::ResetInvite)))
+                }
+                settings::Action::Remove(person) => {
+                    self.overlay = Some(Overlay::Confirm(Confirm::new(Question::RemovePerson(person))))
+                }
                 settings::Action::Profile => self.open_profile(),
                 settings::Action::SetRole(id, administrator) => {
                     let request = page.set_role(id, administrator);
@@ -239,41 +251,6 @@ impl App {
         }
     }
 
-    /// The screen, with the instances in its place until another is put there.
-    fn take_screen(&mut self) -> Screen {
-        std::mem::replace(&mut self.screen, Screen::Instances(InstancePicker::new(0)))
-    }
-
-    fn close_book(&mut self) {
-        match self.take_screen() {
-            Screen::Book(page) => {
-                self.screen = Screen::Books(page.books);
-                self.reload_books();
-            }
-            screen => self.screen = screen,
-        }
-    }
-
-    fn reload_books(&self) {
-        if let Screen::Books(screen) = &self.screen {
-            self.spawn(screen.load());
-        }
-    }
-
-    /// Open the selected page, section or picture of the book.
-    fn open_leaf(&mut self) {
-        match self.take_screen() {
-            Screen::Book(book) => match book.leaf_page() {
-                Some(page) => {
-                    self.spawn(page.load());
-                    self.screen = Screen::Leaf(Box::new(page), book);
-                }
-                None => self.screen = Screen::Book(book),
-            },
-            screen => self.screen = screen,
-        }
-    }
-
     /// Back to the book, with the page that was open selected.
     pub fn close_leaf(&mut self) {
         self.return_to_book();
@@ -291,86 +268,7 @@ impl App {
         }
     }
 
-    fn reload_book(&self) {
-        if let Screen::Book(screen) = &self.screen {
-            self.spawn(screen.load());
-        }
-    }
-
-    fn open_settings(&mut self) {
-        match self.take_screen() {
-            Screen::Books(books) => {
-                let page = SettingsPage::new(books.host.clone());
-                self.spawn(page.load());
-                self.screen = Screen::Settings(Box::new(page), books);
-            }
-            screen => self.screen = screen,
-        }
-    }
-
-    fn close_settings(&mut self) {
-        self.screen = match self.take_screen() {
-            Screen::Settings(_, books) => Screen::Books(books),
-            other => other,
-        };
-    }
-
-    fn open_profile(&mut self) {
-        match self.take_screen() {
-            Screen::Settings(settings, books) => {
-                let page = ProfilePage::new(settings.host.clone());
-                self.spawn(page.load());
-                self.screen = Screen::Profile(Box::new(page), Box::new(Screen::Settings(settings, books)));
-            }
-            screen => self.screen = screen,
-        }
-    }
-
-    /// Back to the settings, with the people reloaded for a changed name.
-    fn close_profile(&mut self) {
-        self.screen = match self.take_screen() {
-            Screen::Profile(_, back) => *back,
-            other => other,
-        };
-        self.load_people();
-    }
-
-    fn load_people(&self) {
-        if let Screen::Settings(page, _) = &self.screen {
-            self.spawn(page.load());
-        }
-    }
-
-    /// The edit screen for a book, or for a new one without an id.
-    fn open_editor(&mut self, book_id: Option<u64>) {
-        let books = match &self.screen {
-            Screen::Books(screen) => screen,
-            Screen::Book(screen) => &screen.books,
-            _ => return,
-        };
-
-        let page = EditPage::new(books.host.clone(), books.name.clone(), book_id);
-        self.spawn(page.load());
-        let back = self.take_screen();
-        self.screen = Screen::Edit(Box::new(page), Box::new(back));
-    }
-
-    /// Back to where the editor was opened, reloading what it may have changed.
-    fn close_editor(&mut self, changed: bool) {
-        match self.take_screen() {
-            Screen::Edit(_, back) => {
-                self.screen = *back;
-
-                if changed {
-                    self.reload_book();
-                    self.reload_books();
-                }
-            }
-            screen => self.screen = screen,
-        }
-    }
-
-    pub fn books_loaded(&mut self, id: Id, books: Result<Vec<BookCard>>) {
+    pub fn books_loaded(&mut self, id: Id, books: Result<Library>) {
         if let Some(Target::Books(screen)) = self.screen.find(id) {
             screen.loaded(books);
 
@@ -391,7 +289,7 @@ impl App {
     }
 
     /// After a book's pages changed, load it again to show them as they are.
-    pub fn book_changed(&mut self, id: Id, result: Result<()>) {
+    pub fn leaves_changed(&mut self, id: Id, result: Result<()>) {
         if let Err(error) = result {
             self.show_error(error);
         }
@@ -402,8 +300,8 @@ impl App {
         }
     }
 
-    pub fn form_loaded(&mut self, id: Id, form: Result<BookForm>) {
-        if let Some(Target::Edit(page)) = self.screen.find(id) {
+    pub fn book_form_loaded(&mut self, id: Id, form: Result<BookForm>) {
+        if let Some(Target::BookForm(page)) = self.screen.find(id) {
             page.form = Loading::from(form);
 
             if let Some(cover) = page.form.ready().and_then(|it| it.cover.clone()) {
@@ -414,17 +312,17 @@ impl App {
 
     /// After saving a book, back to it, or on to the new book. The editor is
     /// always the screen on top while it's open.
-    pub fn saved(&mut self, id: Id, result: Result<u64>) {
-        if let Some(Target::Edit(page)) = self.screen.find(id) {
+    pub fn book_saved(&mut self, id: Id, result: Result<u64>) {
+        if let Some(Target::BookForm(page)) = self.screen.find(id) {
             page.saving = false;
             let new_book = page.book_id.is_none();
 
             match result {
                 Ok(book_id) if new_book => {
-                    self.close_editor(true);
+                    self.close_book_form(true);
                     self.open_book(book_id);
                 }
-                Ok(_) => self.close_editor(true),
+                Ok(_) => self.close_book_form(true),
                 Err(error) => self.show_error(error),
             }
         } else if let Err(error) = result {
@@ -434,12 +332,12 @@ impl App {
 
     /// After a book is deleted, back to the books it was among.
     pub fn book_deleted(&mut self, id: Id, result: Result<()>) {
-        if let Some(Target::Edit(page)) = self.screen.find(id) {
+        if let Some(Target::BookForm(page)) = self.screen.find(id) {
             page.saving = false;
 
             match result {
                 Ok(()) => {
-                    self.close_editor(false);
+                    self.close_book_form(false);
                     self.close_book();
                 }
                 Err(error) => self.show_error(error),
@@ -490,7 +388,9 @@ impl App {
         match result {
             Ok(markdown) => match editor {
                 Some(editor) => editor.insert_block(&markdown),
-                None => self.notice = Some("Uploaded, but the page it was for isn't being edited any more.".to_string()),
+                None => {
+                    self.notice = Some("Uploaded, but the page it was for isn't being edited any more.".to_string())
+                }
             },
             Err(error) => self.show_error(error),
         }
@@ -546,12 +446,129 @@ impl App {
             self.show_error(error);
         }
     }
+
+    fn take_screen(&mut self) -> Screen {
+        std::mem::replace(&mut self.screen, Screen::Instances(InstancePicker::new(0)))
+    }
+
+    fn close_book(&mut self) {
+        match self.take_screen() {
+            Screen::Book(page) => {
+                self.screen = Screen::Books(page.books);
+                self.reload_books();
+            }
+            screen => self.screen = screen,
+        }
+    }
+
+    fn reload_books(&self) {
+        if let Screen::Books(screen) = &self.screen {
+            self.spawn(screen.load());
+        }
+    }
+
+    fn open_leaf(&mut self) {
+        match self.take_screen() {
+            Screen::Book(book) => match book.leaf_page() {
+                Some(page) => {
+                    self.spawn(page.load());
+                    self.screen = Screen::Leaf(Box::new(page), book);
+                }
+                None => self.screen = Screen::Book(book),
+            },
+            screen => self.screen = screen,
+        }
+    }
+
+    fn reload_book(&self) {
+        if let Screen::Book(screen) = &self.screen {
+            self.spawn(screen.load());
+        }
+    }
+
+    fn open_settings(&mut self) {
+        match self.take_screen() {
+            Screen::Books(books) => {
+                let page = SettingsPage::new(books.host.clone());
+                self.spawn(page.load());
+                self.screen = Screen::Settings(Box::new(page), books);
+            }
+            screen => self.screen = screen,
+        }
+    }
+
+    fn close_settings(&mut self) {
+        self.screen = match self.take_screen() {
+            Screen::Settings(_, books) => Screen::Books(books),
+            other => other,
+        };
+    }
+
+    fn open_profile(&mut self) {
+        match self.take_screen() {
+            Screen::Settings(settings, books) => {
+                let page = ProfilePage::new(settings.host.clone());
+                self.spawn(page.load());
+                self.screen = Screen::Profile(Box::new(page), Box::new(Screen::Settings(settings, books)));
+            }
+            screen => self.screen = screen,
+        }
+    }
+
+    fn close_profile(&mut self) {
+        self.screen = match self.take_screen() {
+            Screen::Profile(_, back) => *back,
+            other => other,
+        };
+        self.reload_people();
+    }
+
+    fn reload_people(&self) {
+        if let Screen::Settings(page, _) = &self.screen {
+            self.spawn(page.load());
+        }
+    }
+
+    fn open_book_form(&mut self, book_id: Option<u64>) {
+        let books = match &self.screen {
+            Screen::Books(screen) => screen,
+            Screen::Book(screen) => &screen.books,
+            _ => return,
+        };
+
+        let page = BookFormPage::new(books.host.clone(), books.instance_name.clone(), book_id);
+        self.spawn(page.load());
+        let back = self.take_screen();
+        self.screen = Screen::BookForm(Box::new(page), Box::new(back));
+    }
+
+    fn close_book_form(&mut self, changed: bool) {
+        match self.take_screen() {
+            Screen::BookForm(_, back) => {
+                self.screen = *back;
+
+                if changed {
+                    self.reload_book();
+                    self.reload_books();
+                }
+            }
+            screen => self.screen = screen,
+        }
+    }
 }
 
 fn find_books(books: &mut Books, id: Id) -> Option<Target<'_>> {
-    if books.id == id { Some(Target::Books(books)) } else { None }
+    if books.id == id {
+        Some(Target::Books(books))
+    } else {
+        None
+    }
 }
 
 fn find_book(page: &mut BookPage, id: Id) -> Option<Target<'_>> {
-    if page.id == id { Some(Target::Book(page)) } else { find_books(&mut page.books, id) }
+    if page.id == id {
+        Some(Target::Book(page))
+    } else {
+        find_books(&mut page.books, id)
+    }
 }

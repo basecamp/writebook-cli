@@ -5,8 +5,8 @@
 //! inventory (see inventory.rs).
 //!
 //! A token given in WRITEBOOK_TOKEN wins over all of that: it's
-//! used as-is, never refreshed, and nothing is stored. It belongs to one site,
-//! named in WRITEBOOK_TOKEN_HOST, and is never sent anywhere
+//! used as-is, not refreshed, and nothing is stored. It belongs to one site,
+//! named in WRITEBOOK_TOKEN_HOST, and is sent nowhere
 //! else, nor over plain http except to this machine. And the browser sign-in
 //! only starts when someone is at a terminal to approve it; unattended runs
 //! get an error instead of a wait.
@@ -25,7 +25,7 @@ use crate::inventory;
 
 mod sign_in;
 mod storage;
-pub use sign_in::sign_in;
+pub use sign_in::{forget_unfinished_sign_ins, sign_in};
 
 const CLIENT_ID: &str = "writebook-cli";
 const DEVICE_CODE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -56,6 +56,12 @@ pub enum Access {
     ReadOnly,
 }
 
+impl Access {
+    pub fn from_flag(read_only: bool) -> Access {
+        if read_only { Access::ReadOnly } else { Access::Full }
+    }
+}
+
 /// A token to send, and what the sign-in it came from may do.
 pub struct Token {
     pub value: String,
@@ -66,46 +72,55 @@ impl Token {
     /// WRITEBOOK_TOKEN can only be told apart by its prefix: API tokens only
     /// read, and the rest are what a sign-in handed out.
     pub fn given(value: String) -> Token {
-        let access = if value.starts_with("wb_api_") { Access::ReadOnly } else { Access::Full };
+        let access = if value.starts_with("wb_api_") {
+            Access::ReadOnly
+        } else {
+            Access::Full
+        };
         Token { value, access }
     }
 }
 
 impl From<Credentials> for Token {
     fn from(credentials: Credentials) -> Token {
-        Token { value: credentials.access_token, access: credentials.access }
-    }
-}
-
-impl Access {
-    pub fn from_flag(read_only: bool) -> Access {
-        if read_only {
-            Access::ReadOnly
-        } else {
-            Access::Full
+        Token {
+            value: credentials.access_token,
+            access: credentials.access,
         }
     }
 }
 
-/// Use this token, for the given site, instead of the stored sign-in.
+/// Use this token, for the given site, instead of the stored sign-in. The
+/// token is sent only to that site, and only over https (or plain http to this
+/// machine); a request for any other site is refused.
 pub fn use_token(token: &str, host: Option<&str>) {
     let token = token.trim();
     let host = host.map(normalize_host).filter(|it| !it.is_empty());
 
     if !token.is_empty() {
-        let _ = GIVEN_TOKEN.set(GivenToken { token: token.to_string(), host });
+        let given = GivenToken {
+            token: token.to_string(),
+            host,
+        };
+
+        match GIVEN_TOKEN.set(given) {
+            Ok(()) => {}
+            Err(_already_set) => {}
+        }
     }
 }
 
-/// What the given token means for this host: Ok(None) when there is no given
-/// token, Ok(Some) when it may go there, and an error when it may not.
-fn given_token(host: &str) -> Result<Option<String>> {
+fn given_token(host: &str) -> Result<Option<Token>> {
     let Some(given) = GIVEN_TOKEN.get() else {
         return Ok(None);
     };
 
-    let Some(token_host) = &given.host else {
-        bail!("say which site the token is for, so it is never sent anywhere else: WRITEBOOK_TOKEN_HOST={}", normalize_host(host));
+    let token_host = match &given.host {
+        Some(token_host) => token_host,
+        None => bail!(
+            "say which site the token is for, so it is never sent anywhere else: WRITEBOOK_TOKEN_HOST={}",
+            normalize_host(host)
+        ),
     };
 
     if *token_host != normalize_host(host) {
@@ -116,7 +131,7 @@ fn given_token(host: &str) -> Result<Option<String>> {
         bail!("the token is only sent over https (or plain http to this machine), not to {token_host}");
     }
 
-    Ok(Some(given.token.clone()))
+    Ok(Some(Token::given(given.token.clone())))
 }
 
 /// Sign-ins only travel over https, or plain http to this machine.
@@ -142,7 +157,7 @@ fn is_local(host: &str) -> bool {
 /// when all else fails.
 pub fn access_token(host: &str) -> Result<Token> {
     if let Some(token) = given_token(host)? {
-        return Ok(Token::given(token));
+        return Ok(token);
     }
 
     ensure_private_connection(host)?;
@@ -150,16 +165,15 @@ pub fn access_token(host: &str) -> Result<Token> {
 
     match storage::load(host, &profile)? {
         Some(credentials) if !expired(&credentials) => Ok(credentials.into()),
-        Some(credentials) => match refresh(host, &profile, &credentials) {
-            Ok(refreshed) => Ok(refreshed.into()),
-            Err(_) => Ok(login(host, &profile, credentials.access)?.into()),
-        },
-        None => Ok(login(host, &profile, Access::Full)?.into()),
+        Some(credentials) => refresh_or_sign_in_again(host, &profile, &credentials),
+        None => Ok(sign_in_at_terminal(host, &profile, Access::Full)?.into()),
     }
 }
 
 /// Force-refresh after a 401: the cached token was rejected even though it
 /// looked fresh, so rotate the refresh token or fall back to signing in again.
+/// A renewal never widens access: a read-only sign-in renewed with more is
+/// revoked, not kept.
 pub fn renewed_access_token(host: &str) -> Result<Token> {
     if given_token(host)?.is_some() {
         bail!("{host} did not accept the token from WRITEBOOK_TOKEN");
@@ -169,11 +183,15 @@ pub fn renewed_access_token(host: &str) -> Result<Token> {
     let profile = inventory::profile_for(host)?;
 
     match storage::load(host, &profile)? {
-        Some(credentials) => match refresh(host, &profile, &credentials) {
-            Ok(refreshed) => Ok(refreshed.into()),
-            Err(_) => Ok(login(host, &profile, credentials.access)?.into()),
-        },
-        None => Ok(login(host, &profile, Access::Full)?.into()),
+        Some(credentials) => refresh_or_sign_in_again(host, &profile, &credentials),
+        None => Ok(sign_in_at_terminal(host, &profile, Access::Full)?.into()),
+    }
+}
+
+fn refresh_or_sign_in_again(host: &str, profile: &str, credentials: &Credentials) -> Result<Token> {
+    match refresh(host, profile, credentials) {
+        Ok(refreshed) => Ok(refreshed.into()),
+        Err(_) => Ok(sign_in_at_terminal(host, profile, credentials.access)?.into()),
     }
 }
 
@@ -197,24 +215,29 @@ pub fn existing_access_token(host: &str) -> Result<Option<String>> {
 /// can't print notes, like the TUI or MCP, can tell a dead sign-in from none.
 pub fn signed_in_token(host: &str) -> Result<Option<Token>> {
     if let Some(token) = given_token(host)? {
-        return Ok(Some(Token::given(token)));
+        return Ok(Some(token));
     }
 
     let profile = inventory::profile_for(host)?;
 
-    let Some(credentials) = storage::load(host, &profile)? else {
-        return Ok(None);
-    };
+    match storage::load(host, &profile)? {
+        None => Ok(None),
+        Some(credentials) => {
+            ensure_private_connection(host)?;
 
-    ensure_private_connection(host)?;
-
-    if expired(&credentials) {
-        match refresh(host, &profile, &credentials) {
-            Ok(refreshed) => Ok(Some(refreshed.into())),
-            Err(cause) => Err(RenewalFailed { host: host.to_string(), cause }.into()),
+            if expired(&credentials) {
+                match refresh(host, &profile, &credentials) {
+                    Ok(refreshed) => Ok(Some(refreshed.into())),
+                    Err(cause) => Err(RenewalFailed {
+                        host: host.to_string(),
+                        cause,
+                    }
+                    .into()),
+                }
+            } else {
+                Ok(Some(credentials.into()))
+            }
         }
-    } else {
-        Ok(Some(credentials.into()))
     }
 }
 
@@ -240,10 +263,10 @@ pub fn stored_access(host: &str, profile: &str) -> Result<Option<Access>> {
 
 /// Whether the CLI has a token for this site that may change books. No
 /// sign-in can't, and neither can a WRITEBOOK_TOKEN meant for another site,
-/// which is never sent here.
+/// which is not sent here.
 pub fn can_write(host: &str) -> Result<bool> {
     match given_token(host) {
-        Ok(Some(token)) => Ok(Token::given(token).access == Access::Full),
+        Ok(Some(token)) => Ok(token.access == Access::Full),
         Ok(None) => Ok(stored_access(host, &inventory::profile_for(host)?)? == Some(Access::Full)),
         Err(_) => Ok(false),
     }
@@ -252,7 +275,7 @@ pub fn can_write(host: &str) -> Result<bool> {
 /// Fail before changing anything when the sign-in can only read.
 pub fn ensure_can_write(host: &str) -> Result<()> {
     match given_token(host)? {
-        Some(token) if token.starts_with("wb_api_") => {
+        Some(token) if token.access == Access::ReadOnly => {
             bail!("WRITEBOOK_TOKEN holds a read-only API token, which can't change books. Sign in to {host} to do that")
         }
         Some(_) => Ok(()),
@@ -277,19 +300,15 @@ pub fn forget(host: &str, profile: &str) -> Result<()> {
     storage::locked(|| {
         if let Some(credentials) = storage::load(host, profile)? {
             if let Err(error) = revoke(host, &credentials) {
-                eprintln!("warning: could not tell {host} to revoke the sign-in ({error:#}); it was removed here anyway");
+                eprintln!(
+                    "warning: could not tell {host} to revoke the sign-in ({error:#}); it was removed here anyway"
+                );
             }
         }
 
         sign_in::forget_pending(host, profile)?;
         storage::delete(host, profile)
     })
-}
-
-/// Drop the sign-ins to a site that were started but never finished, for
-/// any profile.
-pub fn forget_unfinished_sign_ins(host: &str) -> Result<()> {
-    sign_in::forget_all_pending(host)
 }
 
 fn revoke(host: &str, credentials: &Credentials) -> Result<()> {
@@ -307,8 +326,7 @@ fn revoke(host: &str, credentials: &Credentials) -> Result<()> {
     }
 }
 
-/// Sign in again with the same access the last sign-in had.
-fn login(host: &str, profile: &str, access: Access) -> Result<Credentials> {
+fn sign_in_at_terminal(host: &str, profile: &str, access: Access) -> Result<Credentials> {
     if !someone_can_approve() {
         bail!(
             "not signed in to {host}, and nobody is at a terminal to approve a browser sign-in. \
@@ -328,9 +346,6 @@ fn sign_in_command(host: &str, profile: &str, access: Access) -> String {
     }
 }
 
-/// Trade the refresh token for new credentials. Each refresh token works
-/// once, so two commands refreshing at the same time would sign each other
-/// out: the lock lets one go first, and the other then finds its work done.
 fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials> {
     storage::locked(|| {
         match storage::load(host, profile)? {
@@ -358,8 +373,6 @@ fn refresh(host: &str, profile: &str, stale: &Credentials) -> Result<Credentials
     })
 }
 
-/// A renewal keeps the access the sign-in had. One that doesn't say keeps
-/// it as it was; one that claims more is revoked rather than kept.
 fn renewed(host: &str, stale: &Credentials, mut credentials: Credentials, body: &Value) -> Result<Credentials> {
     if body["scope"].is_null() {
         credentials.access = stale.access;
@@ -376,8 +389,6 @@ fn renewed(host: &str, stale: &Credentials, mut credentials: Credentials, body: 
     Ok(credentials)
 }
 
-/// Writebooks from before read-only sign-ins leave the scope out, and give
-/// full access.
 fn access_from(body: &Value) -> Access {
     if body["scope"].as_str() == Some("read") {
         Access::ReadOnly
@@ -434,18 +445,19 @@ pub fn config_dir() -> Result<PathBuf> {
     let dir = if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|it| !it.is_empty()) {
         PathBuf::from(dir).join("writebook")
     } else {
-        dirs::home_dir().context("could not determine the home directory")?.join(".config/writebook")
+        dirs::home_dir()
+            .context("could not determine the home directory")?
+            .join(".config/writebook")
     };
 
     fsutil::create_private_dir(&dir)?;
     Ok(dir)
 }
 
-/// The device flow needs a person to read the code and approve it. Without a
-/// terminal on both ends (cron, CI), or under an agent (which may well have a
-/// terminal), it would only wait and time out.
 fn someone_can_approve() -> bool {
-    let unattended = ["CI", "WRITEBOOK_NO_SIGN_IN", "CLAUDECODE", "CODEX_SANDBOX"].iter().any(|name| std::env::var_os(name).is_some());
+    let unattended = ["CI", "WRITEBOOK_NO_SIGN_IN", "CLAUDECODE", "CODEX_SANDBOX"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some());
 
     !unattended && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
@@ -466,5 +478,8 @@ fn error_description(body: &Value) -> String {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).expect("clock before 1970").as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before 1970")
+        .as_secs()
 }

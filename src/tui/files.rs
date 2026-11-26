@@ -43,7 +43,16 @@ pub enum Picked {
 impl FilePicker {
     /// A picker for files with these extensions, starting in the folder.
     pub fn new(title: &'static str, kinds: &'static [&'static str], dir: PathBuf) -> FilePicker {
-        let mut picker = FilePicker { title, kinds, dir, entries: Vec::new(), filter: String::new(), selected: 0, offset: 0, error: None };
+        let mut picker = FilePicker {
+            title,
+            kinds,
+            dir,
+            entries: Vec::new(),
+            filter: String::new(),
+            selected: 0,
+            offset: 0,
+            error: None,
+        };
         picker.read();
         picker
     }
@@ -77,7 +86,7 @@ impl FilePicker {
                     self.go(home, None);
                 }
             }
-            KeyCode::Char(character) if views::plain(key) => {
+            KeyCode::Char(character) if views::types_character(key) => {
                 let filter = format!("{}{character}", self.filter);
                 self.set_filter(filter);
             }
@@ -95,16 +104,34 @@ impl FilePicker {
     }
 
     pub fn bindings(&self) -> Vec<Binding> {
-        vec![("type", "find"), ("↑↓", "select"), ("enter", "open"), ("←", "up a folder"), ("~", "home"), ("esc", "cancel")]
+        vec![
+            ("type", "find"),
+            ("↑↓", "select"),
+            ("enter", "open"),
+            ("←", "up a folder"),
+            ("~", "home"),
+            ("esc", "cancel"),
+        ]
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, images: &mut Images) {
         let inside = views::large_window(frame, area, &format!(" {} ", self.title));
 
-        let [location, filter, _, body] =
-            Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inside);
+        let [location, filter, _, body] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inside);
         frame.render_widget(Paragraph::new(Line::from(shown_path(&self.dir)).dim()), location);
-        frame.render_widget(Paragraph::new(Line::from(vec![Span::from("Find: ").dim(), Span::from(format!("{}▏", self.filter))])), filter);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::from("Find: ").dim(),
+                Span::from(format!("{}▏", self.filter)),
+            ])),
+            filter,
+        );
 
         let preview_room = body.width >= 60;
         let [list, _, preview] = if preview_room {
@@ -119,7 +146,11 @@ impl FilePicker {
             let source = Source::file(&file);
 
             if !images.draw(frame, preview, &source) {
-                let note = if images.failed(&source) { "No preview" } else { "Loading the preview…" };
+                let note = if images.failed(&source) {
+                    "No preview"
+                } else {
+                    "Loading the preview…"
+                };
                 frame.render_widget(Paragraph::new(Line::from(note).dim()), preview);
             }
         }
@@ -147,7 +178,11 @@ impl FilePicker {
                 .map(|(index, entry)| {
                     let chosen = index == self.selected;
                     let marker = if chosen { "› " } else { "  " };
-                    let name = if entry.folder { format!("{}/", entry.name) } else { entry.name.clone() };
+                    let name = if entry.folder {
+                        format!("{}/", entry.name)
+                    } else {
+                        entry.name.clone()
+                    };
                     let line = Line::from(format!("{marker}{name}"));
                     let line = if entry.folder { line.fg(Color::Blue) } else { line };
                     if chosen { line.bold().reversed() } else { line }
@@ -158,23 +193,25 @@ impl FilePicker {
         frame.render_widget(Paragraph::new(lines), area);
     }
 
-    /// Open a folder, or pick a file with enter.
     fn open(&mut self, picking: bool) -> Picked {
         let visible = self.visible();
-        let Some(entry) = visible.get(self.selected) else { return Picked::Nothing };
-        let path = self.dir.join(&entry.name);
+        match visible.get(self.selected) {
+            None => Picked::Nothing,
+            Some(entry) => {
+                let path = self.dir.join(&entry.name);
 
-        if entry.folder {
-            self.go(path, None);
-            Picked::Nothing
-        } else if picking {
-            Picked::File(path)
-        } else {
-            Picked::Nothing
+                if entry.folder {
+                    self.go(path, None);
+                    Picked::Nothing
+                } else if picking {
+                    Picked::File(path)
+                } else {
+                    Picked::Nothing
+                }
+            }
         }
     }
 
-    /// To the folder above, with the one we were in selected.
     fn up(&mut self) {
         let from = self.dir.file_name().map(|it| it.to_string_lossy().into_owned());
 
@@ -187,7 +224,9 @@ impl FilePicker {
         self.dir = dir;
         self.filter.clear();
         self.read();
-        self.selected = select.and_then(|name| self.visible().iter().position(|it| it.name == name)).unwrap_or(0);
+        self.selected = select
+            .and_then(|name| self.visible().iter().position(|it| it.name == name))
+            .unwrap_or(0);
     }
 
     fn set_filter(&mut self, filter: String) {
@@ -196,7 +235,6 @@ impl FilePicker {
         self.offset = 0;
     }
 
-    /// The folder's folders, then the files that fit, each by name.
     fn read(&mut self) {
         self.entries.clear();
         self.offset = 0;
@@ -219,15 +257,21 @@ impl FilePicker {
             }
         }
 
-        self.entries.sort_by(|a, b| b.folder.cmp(&a.folder).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        self.entries.sort_by(|a, b| {
+            b.folder
+                .cmp(&a.folder)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
     }
 
     fn fits(&self, name: &str) -> bool {
-        let extension = Path::new(name).extension().map(|it| it.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let extension = Path::new(name)
+            .extension()
+            .map(|it| it.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
         self.kinds.is_empty() || self.kinds.contains(&extension.as_str())
     }
 
-    /// Hidden entries only show when the filter asks for them with a dot.
     fn visible(&self) -> Vec<&Entry> {
         let filter = self.filter.to_lowercase();
 
@@ -250,8 +294,8 @@ fn shown_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
     use crate::scratch::TempDir;
+    use crossterm::event::KeyModifiers;
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

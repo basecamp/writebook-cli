@@ -48,8 +48,14 @@ impl View {
 /// from the edges.
 pub fn masthead(frame: &mut Frame, area: Rect) -> Rect {
     let [top, rest] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
-    frame.render_widget(Paragraph::new(Line::from("Writebook").bold()).alignment(Alignment::Center), top);
-    rest.inner(ratatui::layout::Margin { horizontal: 2, vertical: 1 })
+    frame.render_widget(
+        Paragraph::new(Line::from("Writebook").bold()).alignment(Alignment::Center),
+        top,
+    );
+    rest.inner(ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    })
 }
 
 /// A field framed with a rounded border and its label on the border, blue
@@ -67,7 +73,7 @@ pub fn input(frame: &mut Frame, area: Rect, label: &str, text: Line<'static>, fo
 
 /// Whether a key types its character: not with ctrl or alt held, unless both
 /// are, which is how Windows sends AltGr.
-pub fn plain(key: KeyEvent) -> bool {
+pub fn types_character(key: KeyEvent) -> bool {
     let held = key.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT);
     held.is_empty() || held == KeyModifiers::CONTROL | KeyModifiers::ALT
 }
@@ -75,7 +81,10 @@ pub fn plain(key: KeyEvent) -> bool {
 /// Pasted text for a field of one line: its lines joined by spaces, without
 /// anything that would move the terminal's cursor.
 pub fn one_line(text: &str) -> String {
-    text.split(char::is_control).filter(|it| !it.is_empty()).collect::<Vec<_>>().join(" ")
+    text.split(char::is_control)
+        .filter(|it| !it.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What's typed in a field, with the cursor when focused, or its label
@@ -98,7 +107,10 @@ pub fn buttons(labels: &[(&'static str, bool)]) -> Line<'static> {
         }
 
         if *focused {
-            spans.push(Span::styled(format!(" {label} "), Style::default().fg(Color::Black).bg(Color::Blue).bold()));
+            spans.push(Span::styled(
+                format!(" {label} "),
+                Style::default().fg(Color::Black).bg(Color::Blue).bold(),
+            ));
         } else {
             spans.push(Span::from(format!(" {label} ")).dim());
         }
@@ -120,7 +132,11 @@ pub fn list(frame: &mut Frame, area: Rect, rows: &[Row], selected: usize, offset
     scroll_into_view(offset, selected, height);
 
     for (index, row) in rows.iter().enumerate().skip(*offset).take(height) {
-        let line_area = Rect { y: area.y + (index - *offset) as u16, height: 1, ..area };
+        let line_area = Rect {
+            y: area.y + (index - *offset) as u16,
+            height: 1,
+            ..area
+        };
         let chosen = index == selected;
         let marker = Span::styled(if chosen { "› " } else { "  " }, Style::default().fg(row.color).bold());
 
@@ -142,7 +158,15 @@ pub fn list(frame: &mut Frame, area: Rect, rows: &[Row], selected: usize, offset
 /// Lay tiles out in rows, as many to a row as fit, scrolled so the selected
 /// one is in view. Remembers the columns for moving up and down. No room,
 /// no tiles.
-pub fn grid(area: Rect, width: u16, height: u16, count: usize, selected: usize, columns: &mut usize, offset: &mut usize) -> Vec<(usize, Rect)> {
+pub fn grid(
+    area: Rect,
+    width: u16,
+    height: u16,
+    count: usize,
+    selected: usize,
+    columns: &mut usize,
+    offset: &mut usize,
+) -> Vec<(usize, Rect)> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
@@ -157,7 +181,12 @@ pub fn grid(area: Rect, width: u16, height: u16, count: usize, selected: usize, 
         .map(|index| {
             let row = (index / *columns - *offset) as u16;
             let column = (index % *columns) as u16;
-            let tile = Rect { x: area.x + column * width, y: area.y + row * height, width, height };
+            let tile = Rect {
+                x: area.x + column * width,
+                y: area.y + row * height,
+                width,
+                height,
+            };
             (index, tile.intersection(area))
         })
         .collect()
@@ -204,7 +233,12 @@ pub fn selection_box(frame: &mut Frame, area: Rect, border: Option<Color>) -> Re
     let inside = Block::bordered().inner(area);
 
     if let Some(color) = border {
-        frame.render_widget(Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(color)), area);
+        frame.render_widget(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(color)),
+            area,
+        );
     }
 
     inside
@@ -212,13 +246,20 @@ pub fn selection_box(frame: &mut Frame, area: Rect, border: Option<Color>) -> Re
 
 /// Tiles sit two columns apart.
 pub fn beside_gap(area: Rect) -> Rect {
-    Rect { width: area.width.saturating_sub(2), ..area }
+    Rect {
+        width: area.width.saturating_sub(2),
+        ..area
+    }
 }
 
 /// What Writebook shows for a book without a cover: the title on the theme's color.
 pub fn themed_cover(frame: &mut Frame, area: Rect, title: &str, theme: Option<&str>) {
     let color = theme::color(theme);
-    let ink = if color == Color::White { Color::Black } else { Color::White };
+    let ink = if color == Color::White {
+        Color::Black
+    } else {
+        Color::White
+    };
 
     frame.render_widget(
         Paragraph::new(Line::from(title.to_string()).bold().fg(ink))
@@ -247,8 +288,13 @@ pub fn breadcrumbs(frame: &mut Frame, area: Rect, steps: &[&str]) -> Rect {
         }
     }
 
-    let lines = Block::new().borders(Borders::TOP | Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(Paragraph::new(Line::from(spans)).block(lines), Rect { height: 3, ..heading });
+    let lines = Block::new()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).block(lines),
+        Rect { height: 3, ..heading },
+    );
     rest
 }
 
@@ -279,7 +325,10 @@ pub fn large_window(frame: &mut Frame, area: Rect, title: &str) -> Rect {
 }
 
 fn window_block(title: &str) -> Block<'_> {
-    Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Blue)).title(title.bold())
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Blue))
+        .title(title.bold())
 }
 
 pub fn choice_line(label: &str, chosen: bool) -> Line<'static> {
@@ -294,21 +343,20 @@ pub fn choice_line(label: &str, chosen: bool) -> Line<'static> {
 pub fn qr_lines(url: &str, host: &str) -> Vec<Line<'static>> {
     use qrcode::render::unicode::Dense1x2;
 
-    if let Err(error) = clipboard::shareable(url, host) {
-        return vec![Line::from(error.to_string()).red()];
-    }
-
-    match qrcode::QrCode::new(url) {
-        Ok(code) => code
-            .render::<Dense1x2>()
-            .dark_color(Dense1x2::Light)
-            .light_color(Dense1x2::Dark)
-            .quiet_zone(true)
-            .build()
-            .lines()
-            .map(|line| Line::from(line.to_string()))
-            .collect(),
-        Err(_) => vec![Line::from("The address is too long for a QR code.").dim()],
+    match clipboard::shareable(url, host) {
+        Err(error) => vec![Line::from(error.to_string()).red()],
+        Ok(()) => match qrcode::QrCode::new(url) {
+            Ok(code) => code
+                .render::<Dense1x2>()
+                .dark_color(Dense1x2::Light)
+                .light_color(Dense1x2::Dark)
+                .quiet_zone(true)
+                .build()
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect(),
+            Err(_) => vec![Line::from("The address is too long for a QR code.").dim()],
+        },
     }
 }
 
@@ -319,12 +367,17 @@ pub fn placeholder(frame: &mut Frame, area: Rect, text: &str) {
 pub fn placeholder_lines(frame: &mut Frame, area: Rect, lines: &[&str]) {
     let lines: Vec<Line> = lines.iter().map(|it| Line::from(it.to_string()).dim()).collect();
     let height = lines.len() as u16;
-    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), centered(area, area.width, height));
+    frame.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center),
+        centered(area, area.width, height),
+    );
 }
 
 pub fn failure(frame: &mut Frame, area: Rect, error: &str) {
     frame.render_widget(
-        Paragraph::new(Line::from(error.to_string()).red()).alignment(Alignment::Center).wrap(Wrap { trim: true }),
+        Paragraph::new(Line::from(error.to_string()).red())
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
         centered(area, area.width.min(80), 3),
     );
 }
@@ -332,18 +385,33 @@ pub fn failure(frame: &mut Frame, area: Rect, error: &str) {
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
-    Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
 }
 
 pub fn leaf_title(leaf: &Leaf) -> String {
-    if leaf.title.is_empty() { format!("Untitled {}", leaf.kind.to_lowercase()) } else { leaf.title.clone() }
+    if leaf.title.is_empty() {
+        format!("Untitled {}", leaf.kind.to_lowercase())
+    } else {
+        leaf.title.clone()
+    }
 }
 
 #[cfg(test)]
 pub fn screen_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> Vec<String> {
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
-        .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
         .collect()
 }
 

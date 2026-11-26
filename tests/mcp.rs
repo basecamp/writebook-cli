@@ -1,6 +1,9 @@
 //! `writebook mcp`: books as MCP tools, on stdio for every instance you
 //! added, and over HTTP for one instance with each caller's token.
 
+#![cfg(test)]
+
+#[cfg(test)]
 mod support;
 
 use serde_json::{Value, json};
@@ -14,27 +17,60 @@ fn reads_and_changes_pages_on_stdio() {
     let mut mcp = Mcp::start(&server, Some("wb_at_secret"));
 
     let tools = mcp.request("tools/list", json!({}));
-    let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|it| it["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
     assert_eq!(
         names,
-        ["list_instances", "list_books", "book_contents", "read_book", "read_page", "search", "create_page", "update_page", "create_section"]
+        [
+            "list_instances",
+            "list_books",
+            "book_contents",
+            "read_book",
+            "read_page",
+            "search",
+            "create_page",
+            "update_page",
+            "create_section"
+        ]
     );
 
     let instances = mcp.call("list_instances", json!({}));
-    assert_eq!(instances, json!([{ "alias": "handbook", "url": server.url, "default": true, "can_change_books": true }]));
+    assert_eq!(
+        instances,
+        json!([{ "alias": "handbook", "url": server.url, "default": true, "can_change_books": true }])
+    );
 
     let page = mcp.call("read_page", json!({ "book_id": 4, "page_id": 12 }));
-    assert_eq!(page, json!({ "id": 12, "type": "page", "title": "On call", "markdown": "Call someone.", "fingerprint": "g" }));
+    assert_eq!(
+        page,
+        json!({ "id": 12, "type": "page", "title": "On call", "markdown": "Call someone.", "fingerprint": "g" })
+    );
 
-    let stale = mcp.call_failing("update_page", json!({ "book_id": 4, "page_id": 12, "fingerprint": "old", "markdown": "Page." }));
-    assert!(stale.contains("changed since it was read, so nothing was changed"), "{stale}");
+    let stale = mcp.call_failing(
+        "update_page",
+        json!({ "book_id": 4, "page_id": 12, "fingerprint": "old", "markdown": "Page." }),
+    );
+    assert!(
+        stale.contains("changed since it was read, so nothing was changed"),
+        "{stale}"
+    );
 
-    let updated = mcp.call("update_page", json!({ "book_id": 4, "page_id": 12, "fingerprint": "g", "markdown": "Page the person on call." }));
+    let updated = mcp.call(
+        "update_page",
+        json!({ "book_id": 4, "page_id": 12, "fingerprint": "g", "markdown": "Page the person on call." }),
+    );
     assert_eq!(updated, json!({ "id": 12, "fingerprint": "h" }));
 
     let patch = server.requests().into_iter().rfind(|it| it.method == "PATCH").unwrap();
     let sent: Value = serde_json::from_str(&patch.body).unwrap();
-    assert_eq!(sent, json!({ "base_fingerprint": "g", "page": { "body": "Page the person on call." } }));
+    assert_eq!(
+        sent,
+        json!({ "base_fingerprint": "g", "page": { "body": "Page the person on call." } })
+    );
     assert_eq!(patch.header("Authorization"), Some("Bearer wb_at_secret"));
 }
 
@@ -44,8 +80,23 @@ fn a_read_only_token_gets_only_the_tools_that_read() {
     let mut mcp = Mcp::start(&server, Some("wb_api_secret"));
 
     let tools = mcp.request("tools/list", json!({}));
-    let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|it| it["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["list_instances", "list_books", "book_contents", "read_book", "read_page", "search"]);
+    let names: Vec<&str> = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "list_instances",
+            "list_books",
+            "book_contents",
+            "read_book",
+            "read_page",
+            "search"
+        ]
+    );
 
     let refused = mcp.call_failing("create_page", json!({ "book_id": 4, "title": "New", "markdown": "" }));
     assert!(refused.contains("read-only"), "{refused}");
@@ -58,7 +109,6 @@ fn reaches_the_instance_a_tool_names() {
     let other = fake_writebook();
     let mut mcp = Mcp::start_with(&server, Some("wb_at_secret"), &[&other]);
 
-    // Only handbook has a token, and other is never sent it.
     let instances = mcp.call("list_instances", json!({}));
     assert_eq!(instances[0]["alias"], json!("handbook"));
     assert_eq!(instances[0]["can_change_books"], json!(true));
@@ -68,7 +118,10 @@ fn reaches_the_instance_a_tool_names() {
     assert!(server.requests().iter().any(|it| it.path.starts_with("/search.json")));
 
     let elsewhere = mcp.call_failing("search", json!({ "query": "call", "instance": "other" }));
-    assert!(elsewhere.contains(&format!("so it is not sent to {}", other.url)), "{elsewhere}");
+    assert!(
+        elsewhere.contains(&format!("so it is not sent to {}", other.url)),
+        "{elsewhere}"
+    );
     assert!(other.requests().is_empty());
 
     let unknown = mcp.call_failing("list_books", json!({ "instance": "nope" }));
@@ -81,7 +134,10 @@ fn says_so_when_not_signed_in_rather_than_reading_only_published_books() {
     let mut mcp = Mcp::start(&server, None);
 
     let refused = mcp.call_failing("list_books", json!({}));
-    assert!(refused.contains(&format!("you're not signed in to {}", server.url)), "{refused}");
+    assert!(
+        refused.contains(&format!("you're not signed in to {}", server.url)),
+        "{refused}"
+    );
     assert!(server.requests().is_empty());
 
     let instances = mcp.call("list_instances", json!({}));
@@ -115,7 +171,11 @@ fn needs_an_instance_on_stdio() {
     let output = support::writebook(&["mcp"], &[]);
 
     assert!(!output.status.success());
-    assert!(support::stderr(&output).contains("there are no instances to serve"), "{}", support::stderr(&output));
+    assert!(
+        support::stderr(&output).contains("there are no instances to serve"),
+        "{}",
+        support::stderr(&output)
+    );
 }
 
 #[test]
@@ -136,15 +196,29 @@ fn serves_each_http_caller_with_their_own_token() {
     let mut serving = String::new();
     logs.read_line(&mut serving).unwrap();
     let serving: Value = serde_json::from_str(&serving).unwrap();
-    assert_eq!((&serving["event"], &serving["instance"], &serving["transport"]), (&json!("serving"), &json!(server.url), &json!("http")));
+    assert_eq!(
+        (&serving["event"], &serving["instance"], &serving["transport"]),
+        (&json!("serving"), &json!(server.url), &json!("http"))
+    );
     let endpoint = serving["address"].as_str().unwrap().to_string();
 
-    let anonymous = post(&endpoint, None, &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }));
+    let anonymous = post(
+        &endpoint,
+        None,
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+    );
     assert_eq!(anonymous.0, 401);
 
     post(&endpoint, Some("wb_at_alice"), &initialize());
-    let (_, tools) = post(&endpoint, Some("wb_at_alice"), &json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list" }));
-    assert!(!tools.contains("list_instances") && !tools.contains("\"instance\""), "{tools}");
+    let (_, tools) = post(
+        &endpoint,
+        Some("wb_at_alice"),
+        &json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list" }),
+    );
+    assert!(
+        !tools.contains("list_instances") && !tools.contains("\"instance\""),
+        "{tools}"
+    );
     let (status, answer) = post(
         &endpoint,
         Some("wb_at_alice"),
@@ -153,7 +227,11 @@ fn serves_each_http_caller_with_their_own_token() {
     assert_eq!(status, 200, "{answer}");
     assert!(answer.contains("Handbook"), "{answer}");
 
-    let books = server.requests().into_iter().find(|it| it.path == "/books.json").unwrap();
+    let books = server
+        .requests()
+        .into_iter()
+        .find(|it| it.path == "/books.json")
+        .unwrap();
     assert_eq!(books.header("Authorization"), Some("Bearer wb_at_alice"));
 
     let (_, revoked) = post(
@@ -172,12 +250,28 @@ fn serves_each_http_caller_with_their_own_token() {
     let calls: Vec<(&str, &str, Option<&str>)> = events
         .iter()
         .filter(|it| it["event"] == "tool_call")
-        .map(|it| (it["tool"].as_str().unwrap(), it["outcome"].as_str().unwrap(), it["reason"].as_str()))
+        .map(|it| {
+            (
+                it["tool"].as_str().unwrap(),
+                it["outcome"].as_str().unwrap(),
+                it["reason"].as_str(),
+            )
+        })
         .collect();
-    assert_eq!(calls, [("list_books", "ok", None), ("list_books", "error", Some("token_rejected"))]);
-    assert!(events.iter().any(|it| it["event"] == "http_request" && it["status"] == 401 && it["method"] == "POST"), "{rest}");
+    assert_eq!(
+        calls,
+        [
+            ("list_books", "ok", None),
+            ("list_books", "error", Some("token_rejected"))
+        ]
+    );
+    assert!(
+        events
+            .iter()
+            .any(|it| it["event"] == "http_request" && it["status"] == 401 && it["method"] == "POST"),
+        "{rest}"
+    );
 
-    // Nothing in them points at who made a request or what it was about.
     for word in ["wb_at_alice", "wb_at_revoked", "127.0.0.1", "Handbook"] {
         assert!(!rest.contains(word), "the logs mention a token, an address or a title");
     }
@@ -193,23 +287,29 @@ fn fake_writebook() -> Server {
         }
         ("GET", path) if path.starts_with("/search.json") => reply(200, r#"{"results":[]}"#),
         ("POST", "/books/4/pages.json") => reply(201, "{}"),
-        ("GET", "/books.json") => {
-            reply(200, r#"[{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","slug":"handbook","url":"http://books.test/4/handbook"}]"#)
-        }
+        ("GET", "/books.json") => reply(
+            200,
+            r#"[{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","slug":"handbook","url":"http://books.test/4/handbook"}]"#,
+        ),
         ("GET", "/books/4/manifest.json") => reply(
             200,
             r#"{"book":{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","theme":"blue","slug":"handbook","fingerprint":"f","cover":null},
                 "leaves":[{"id":12,"title":"On call","type":"Page","fingerprint":"g"}]}"#,
         ),
-        ("GET", "/books/4/pages/12.json") => reply(200, r#"{"id":12,"title":"On call","fingerprint":"g","body":"Call someone."}"#),
-        ("PATCH", "/books/4/pages/12.json") if serde_json::from_str::<Value>(&request.body).unwrap()["base_fingerprint"] == "g" => reply(200, r#"{"id":12,"fingerprint":"h"}"#),
+        ("GET", "/books/4/pages/12.json") => reply(
+            200,
+            r#"{"id":12,"title":"On call","fingerprint":"g","body":"Call someone."}"#,
+        ),
+        ("PATCH", "/books/4/pages/12.json")
+            if serde_json::from_str::<Value>(&request.body).unwrap()["base_fingerprint"] == "g" =>
+        {
+            reply(200, r#"{"id":12,"fingerprint":"h"}"#)
+        }
         ("PATCH", "/books/4/pages/12.json") => reply(409, r#"{"error":"stale"}"#),
         _ => reply(404, ""),
     })
 }
 
-/// `writebook mcp` on stdio, with the server added as the instance
-/// "handbook", signed in with the given WRITEBOOK_TOKEN.
 struct Mcp {
     child: Child,
     output: BufReader<ChildStdout>,
@@ -222,22 +322,30 @@ impl Mcp {
         Mcp::start_with(server, token, &[])
     }
 
-    /// Like start, with more instances added after handbook: other, other2, …
     fn start_with(server: &Server, token: Option<&str>, others: &[&Server]) -> Mcp {
         let config = tempdir();
         let mut inventory = format!("default = \"handbook\"\n{}", instance("handbook", &server.url));
         for (n, other) in others.iter().enumerate() {
-            let alias = if n == 0 { "other".to_string() } else { format!("other{}", n + 1) };
+            let alias = if n == 0 {
+                "other".to_string()
+            } else {
+                format!("other{}", n + 1)
+            };
             inventory += &instance(&alias, &other.url);
         }
         std::fs::create_dir_all(config.join("writebook")).unwrap();
         std::fs::write(config.join("writebook/instances.toml"), inventory).unwrap();
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_writebook"));
-        command.args(["mcp"]).env_remove("WRITEBOOK_TOKEN").env("XDG_CONFIG_HOME", &config);
+        command
+            .args(["mcp"])
+            .env_remove("WRITEBOOK_TOKEN")
+            .env("XDG_CONFIG_HOME", &config);
 
         if let Some(token) = token {
-            command.env("WRITEBOOK_TOKEN", token).env("WRITEBOOK_TOKEN_HOST", &server.url);
+            command
+                .env("WRITEBOOK_TOKEN", token)
+                .env("WRITEBOOK_TOKEN_HOST", &server.url);
         }
 
         let mut child = command
@@ -248,7 +356,12 @@ impl Mcp {
             .spawn()
             .unwrap();
         let output = BufReader::new(child.stdout.take().unwrap());
-        let mut mcp = Mcp { child, output, next_id: 1, _config: config };
+        let mut mcp = Mcp {
+            child,
+            output,
+            next_id: 1,
+            _config: config,
+        };
 
         let params = initialize()["params"].clone();
         mcp.request("initialize", params);
@@ -273,15 +386,13 @@ impl Mcp {
         self.next_id += 1;
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
 
-        loop {
+        let mut message = Value::Null;
+        while message["id"] != json!(id) {
             let mut line = String::new();
             assert_ne!(self.output.read_line(&mut line).unwrap(), 0, "writebook mcp stopped");
-            let message: Value = serde_json::from_str(&line).unwrap();
-
-            if message["id"] == json!(id) {
-                return message["result"].clone();
-            }
+            message = serde_json::from_str(&line).unwrap();
         }
+        message["result"].clone()
     }
 
     fn send(&mut self, message: &Value) {
@@ -292,8 +403,12 @@ impl Mcp {
 
 impl Drop for Mcp {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Err(error) = self.child.kill() {
+            eprintln!("could not kill writebook mcp: {error}");
+        }
+        if let Err(error) = self.child.wait() {
+            eprintln!("could not wait for writebook mcp: {error}");
+        }
     }
 }
 
@@ -322,5 +437,8 @@ fn post(endpoint: &str, token: Option<&str>, body: &Value) -> (u16, String) {
     }
 
     let mut response = request.send_json(body).unwrap();
-    (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+    (
+        response.status().as_u16(),
+        response.body_mut().read_to_string().unwrap(),
+    )
 }

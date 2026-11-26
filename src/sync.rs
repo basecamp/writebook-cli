@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::api;
 use crate::checkout::{self, Checkout, LeafState, State};
 use crate::fsutil;
-use crate::index::Entry;
+use crate::index::{BookMeta, Entry};
 use crate::merge;
 use crate::plan::{Manifest, ManifestLeaf, RemoteFile};
 
@@ -68,17 +68,14 @@ pub fn materialize_leaf(
             checkout.write_base(&filename, &body)?;
 
             state.leaves.push(LeafState {
-                id: leaf.id,
-                kind: leaf.kind.clone(),
-                title: content.title.clone(),
-                fingerprint: content.fingerprint,
                 filename: Some(filename.clone()),
-                theme: None,
-                image_remote_checksum: None,
-                image_sha256: None,
+                ..new_leaf_state(leaf, content.title.clone(), content.fingerprint)
             });
 
-            Ok(Some(Entry::Page { title: content.title, filename }))
+            Ok(Some(Entry::Page {
+                title: content.title,
+                filename,
+            }))
         }
         "Section" => {
             let body = content.body.unwrap_or_default();
@@ -93,64 +90,71 @@ pub fn materialize_leaf(
             };
 
             state.leaves.push(LeafState {
-                id: leaf.id,
-                kind: leaf.kind.clone(),
-                title: content.title.clone(),
-                fingerprint: content.fingerprint,
                 filename: filename.clone(),
                 theme: content.theme.clone(),
-                image_remote_checksum: None,
-                image_sha256: None,
+                ..new_leaf_state(leaf, content.title.clone(), content.fingerprint)
             });
 
-            Ok(Some(Entry::Section { title: content.title, filename, theme: content.theme }))
+            Ok(Some(Entry::Section {
+                title: content.title,
+                filename,
+                theme: content.theme,
+            }))
         }
         "Picture" => {
             // A picture's index line carries its caption, so that's the title
             // we track; the leaf's own title stays server-side.
             let caption = content.caption.unwrap_or_default();
 
-            let Some(image) = content.image else {
-                // A picture with no image has nothing to edit locally. It stays
-                // in state so we don't mistake it for a deletion, but gets no
-                // file and no index line.
-                state.leaves.push(LeafState {
-                    id: leaf.id,
-                    kind: leaf.kind.clone(),
-                    title: caption,
-                    fingerprint: content.fingerprint,
-                    filename: None,
-                    theme: None,
-                    image_remote_checksum: None,
-                    image_sha256: None,
-                });
+            match content.image {
+                None => {
+                    // A picture with no image has nothing to edit locally. It stays
+                    // in state so we don't mistake it for a deletion, but gets no
+                    // file and no index line.
+                    state.leaves.push(new_leaf_state(leaf, caption, content.fingerprint));
 
-                return Ok(None);
-            };
+                    Ok(None)
+                }
+                Some(image) => {
+                    let filename = claim_filename(picture_filename(&image), taken);
+                    let bytes = client.download(&image.url)?;
+                    fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
 
-            let filename = claim_filename(format!("assets/{}", sanitize_filename(&image.filename)), taken);
-            let bytes = client.download(&image.url)?;
-            fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
+                    state.leaves.push(LeafState {
+                        filename: Some(filename.clone()),
+                        image_remote_checksum: Some(image.checksum),
+                        image_sha256: Some(checkout::sha256(&bytes)),
+                        ..new_leaf_state(leaf, caption.clone(), content.fingerprint)
+                    });
 
-            state.leaves.push(LeafState {
-                id: leaf.id,
-                kind: leaf.kind.clone(),
-                title: caption.clone(),
-                fingerprint: content.fingerprint,
-                filename: Some(filename.clone()),
-                theme: None,
-                image_remote_checksum: Some(image.checksum),
-                image_sha256: Some(checkout::sha256(&bytes)),
-            });
-
-            Ok(Some(Entry::Picture { caption, filename }))
+                    Ok(Some(Entry::Picture { caption, filename }))
+                }
+            }
         }
         other => anyhow::bail!("the server sent an unknown leaf type: {other}"),
     }
 }
 
+fn new_leaf_state(leaf: &ManifestLeaf, title: String, fingerprint: String) -> LeafState {
+    LeafState {
+        id: leaf.id,
+        kind: leaf.kind.clone(),
+        title,
+        fingerprint,
+        filename: None,
+        theme: None,
+        image_remote_checksum: None,
+        image_sha256: None,
+    }
+}
+
 /// Download every /u/ upload a page body references that assets/ doesn't hold yet.
-pub fn mirror_uploads(client: &mut api::Client, checkout: &Checkout, state: &mut State, localized_body: &str) -> Result<()> {
+pub fn mirror_uploads(
+    client: &mut api::Client,
+    checkout: &Checkout,
+    state: &mut State,
+    localized_body: &str,
+) -> Result<()> {
     for slug in merge::referenced_assets(localized_body) {
         let path = checkout.working_path(&format!("assets/{slug}"))?;
 
@@ -166,8 +170,8 @@ pub fn mirror_uploads(client: &mut api::Client, checkout: &Checkout, state: &mut
     Ok(())
 }
 
-pub fn book_meta(manifest: &Manifest, state: &State) -> checkout::BookMeta {
-    checkout::BookMeta {
+pub fn book_meta(manifest: &Manifest, state: &State) -> BookMeta {
+    BookMeta {
         title: manifest.book.title.clone(),
         subtitle: manifest.book.subtitle.clone().unwrap_or_default(),
         author: manifest.book.author.clone().unwrap_or_default(),
@@ -176,12 +180,10 @@ pub fn book_meta(manifest: &Manifest, state: &State) -> checkout::BookMeta {
     }
 }
 
-/// Where the remote cover lives in assets/: the tracked file when it's the
-/// same image, otherwise where mirror_cover puts it. Empty for no cover.
 fn cover_filename(manifest: &Manifest, state: &State) -> String {
     match (&manifest.book.cover, &state.cover) {
         (Some(remote), Some(current)) if current.remote_checksum == remote.checksum => current.filename.clone(),
-        (Some(remote), _) => format!("assets/cover-{}", sanitize_filename(&remote.filename)),
+        (Some(remote), _) => remote_cover_filename(remote),
         (None, _) => String::new(),
     }
 }
@@ -189,57 +191,56 @@ fn cover_filename(manifest: &Manifest, state: &State) -> String {
 /// Mirror the book cover into assets/, tracking it in state. Returns true
 /// when it kept a cover you changed locally instead of the remote one; the
 /// next push uploads it.
-pub fn mirror_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, manifest: &Manifest) -> Result<bool> {
+pub fn mirror_cover(
+    client: &mut api::Client,
+    checkout: &Checkout,
+    state: &mut State,
+    manifest: &Manifest,
+) -> Result<bool> {
     match (&manifest.book.cover, state.cover.clone()) {
         (Some(remote), current) => {
             if current.as_ref().is_some_and(|it| it.remote_checksum == remote.checksum) {
-                return Ok(false);
-            }
+                Ok(false)
+            } else if current.as_ref().is_some_and(|it| cover_modified_locally(checkout, it)) {
+                eprintln!("warning: the cover changed both locally and remotely — keeping your copy");
+                Ok(true)
+            } else {
+                let filename = remote_cover_filename(remote);
+                let bytes = client.download(&remote.url)?;
 
-            if let Some(current) = &current {
-                if cover_modified_locally(checkout, current) {
-                    eprintln!("warning: the cover changed both locally and remotely — keeping your copy");
-                    return Ok(true);
+                if let Some(current) = &current {
+                    if current.filename != filename && !used_by_pages_or_pictures(state, &current.filename) {
+                        checkout.remove_working_if_present(&current.filename)?;
+                    }
                 }
+
+                fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
+
+                state.cover = Some(checkout::CoverState {
+                    filename,
+                    remote_checksum: remote.checksum.clone(),
+                    sha256: checkout::sha256(&bytes),
+                });
+                Ok(false)
             }
-
-            let filename = format!("assets/cover-{}", sanitize_filename(&remote.filename));
-            let bytes = client.download(&remote.url)?;
-
-            if let Some(current) = &current {
-                if current.filename != filename && !used_by_pages_or_pictures(state, &current.filename) {
-                    let _ = std::fs::remove_file(checkout.working_path(&current.filename)?);
-                }
-            }
-
-            fsutil::write_atomically(&checkout.working_path(&filename)?, &bytes)?;
-
-            state.cover = Some(checkout::CoverState {
-                filename,
-                remote_checksum: remote.checksum.clone(),
-                sha256: checkout::sha256(&bytes),
-            });
         }
         (None, Some(current)) => {
             if cover_modified_locally(checkout, &current) {
                 eprintln!("warning: the cover was removed remotely but modified locally — keeping your copy");
-                return Ok(true);
-            }
+                Ok(true)
+            } else {
+                if !used_by_pages_or_pictures(state, &current.filename) {
+                    checkout.remove_working_if_present(&current.filename)?;
+                }
 
-            if !used_by_pages_or_pictures(state, &current.filename) {
-                let _ = std::fs::remove_file(checkout.working_path(&current.filename)?);
+                state.cover = None;
+                Ok(false)
             }
-
-            state.cover = None;
         }
-        (None, None) => {}
+        (None, None) => Ok(false),
     }
-
-    Ok(false)
 }
 
-/// A cover file can double as a picture or an image in a page. Removing it
-/// along with the cover would break those.
 fn used_by_pages_or_pictures(state: &State, filename: &str) -> bool {
     let basename = filename.strip_prefix("assets/").unwrap_or(filename);
     state.leaves.iter().any(|it| it.filename.as_deref() == Some(filename)) || state.uploads.contains_key(basename)
@@ -262,8 +263,31 @@ pub fn page_filename(title: &str, id: u64) -> String {
     }
 }
 
+pub fn picture_filename(image: &RemoteFile) -> String {
+    format!("assets/{}", sanitize_filename(&image.filename))
+}
+
+fn remote_cover_filename(cover: &RemoteFile) -> String {
+    format!("assets/cover-{}", sanitize_filename(&cover.filename))
+}
+
+/// A filename nothing in `taken` has yet, which it then takes: the wanted
+/// name as-is, or with -2, -3, ... spliced in before the extension.
 pub fn claim_filename(wanted: String, taken: &mut Vec<String>) -> String {
-    let filename = checkout::unique_filename(&wanted, taken);
+    let filename = if taken.contains(&wanted) {
+        let (stem, extension) = match wanted.rsplit_once('.') {
+            Some((stem, extension)) => (stem.to_string(), format!(".{extension}")),
+            None => (wanted.clone(), String::new()),
+        };
+
+        (2..)
+            .map(|counter| format!("{stem}-{counter}{extension}"))
+            .find(|candidate| !taken.contains(candidate))
+            .expect("an unbounded counter always finds a free name")
+    } else {
+        wanted
+    };
+
     taken.push(filename.clone());
     filename
 }
@@ -271,7 +295,13 @@ pub fn claim_filename(wanted: String, taken: &mut Vec<String>) -> String {
 pub fn sanitize_filename(filename: &str) -> String {
     let cleaned: String = filename
         .chars()
-        .map(|it| if it.is_alphanumeric() || it == '.' || it == '-' || it == '_' { it } else { '-' })
+        .map(|it| {
+            if it.is_alphanumeric() || it == '.' || it == '-' || it == '_' {
+                it
+            } else {
+                '-'
+            }
+        })
         .collect();
 
     cleaned.trim_start_matches(['-', '.']).trim_end_matches('-').to_string()

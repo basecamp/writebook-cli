@@ -9,13 +9,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(windows)]
 mod owner_only;
 
+/// Written to a new file next to `path` and renamed over it. A file or symlink
+/// planted where the new file goes makes the write fail rather than go through it.
 pub fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     let temporary = temporary_sibling(path)?;
-    fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?.write_all(contents)?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?
+        .write_all(contents)?;
     fs::rename(&temporary, path).with_context(|| format!("could not write {}", path.display()))?;
     Ok(())
 }
 
+/// Like `write_atomically`, with the file readable only by its owner from the
+/// moment it exists, so its contents are never readable by others.
 pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let payload = serde_json::to_string_pretty(value)?;
     let temporary = temporary_sibling(path)?;
@@ -24,16 +32,17 @@ pub fn write_json_privately<T: Serialize>(path: &Path, value: &T) -> Result<()> 
     Ok(())
 }
 
-/// Created readable only by its owner, so the contents are never readable by
-/// others, not even for a moment.
 #[cfg(unix)]
 fn create_private(path: &Path) -> Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    Ok(fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?)
+    Ok(fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?)
 }
 
-/// Restricted while still empty, before anything is written to it.
 #[cfg(windows)]
 fn create_private(path: &Path) -> Result<fs::File> {
     let file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
@@ -46,8 +55,13 @@ fn create_private(path: &Path) -> Result<fs::File> {
 pub fn create_private_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(path).with_context(|| format!("could not create {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| format!("could not restrict {}", path.display()))
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .with_context(|| format!("could not create {}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("could not restrict {}", path.display()))
 }
 
 #[cfg(windows)]
@@ -60,15 +74,38 @@ pub fn read_to_string(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))
 }
 
-/// A name nobody else has picked, next to the file it will replace. It's
-/// created with create_new, so a file or symlink someone planted under that
-/// name makes the write fail rather than go through it.
+/// A file that isn't there reads as empty.
+pub fn read_to_string_or_empty(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Best-effort cleanup: a file that's already gone is fine, and any other
+/// failure is a warning, not an error.
+pub fn remove_if_present(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("warning: could not remove {}: {error}", path.display()),
+    }
+}
+
 fn temporary_sibling(path: &Path) -> Result<std::path::PathBuf> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let parent = path.parent().context("path has no parent directory")?;
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|it| it.subsec_nanos()).unwrap_or_default();
-    let unique = format!(".writebook-{}-{nanos}-{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
+    let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(since_epoch) => since_epoch.subsec_nanos(),
+        Err(_before_epoch) => 0,
+    };
+    let unique = format!(
+        ".writebook-{}-{nanos}-{}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
 
     fs::create_dir_all(parent)?;
     Ok(parent.join(unique))
@@ -77,16 +114,15 @@ fn temporary_sibling(path: &Path) -> Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::TempDir;
 
     #[test]
     fn writes_a_file_with_the_longest_name_allowed() {
-        let dir = std::env::temp_dir().join(format!("writebook-fsutil-test-{}", std::process::id()));
+        let dir = TempDir::new();
         let path = dir.join("a".repeat(255));
-        fs::create_dir_all(&dir).unwrap();
 
         write_atomically(&path, b"picture").unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"picture");
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

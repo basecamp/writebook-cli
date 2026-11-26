@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::data::{self, BookCard};
+use super::data::{self, BookCard, Library};
 use super::help::Binding;
 use super::images::{Images, Source};
 use super::search::Search;
@@ -20,8 +20,9 @@ const TILE_HEIGHT: u16 = 18;
 pub struct Books {
     pub id: Id,
     pub host: String,
-    pub name: String,
+    pub instance_name: String,
     pub books: Loading<Vec<BookCard>>,
+    can_write: bool,
     selected: usize,
     columns: usize,
     offset: usize,
@@ -38,25 +39,44 @@ pub enum Action {
 }
 
 impl Books {
-    pub fn new(host: String, name: String) -> Books {
-        Books { id: next_id(), host, name, books: Loading::Pending, selected: 0, columns: 1, offset: 0 }
+    pub fn new(host: String, instance_name: String) -> Books {
+        Books {
+            id: next_id(),
+            host,
+            instance_name,
+            books: Loading::Pending,
+            can_write: false,
+            selected: 0,
+            columns: 1,
+            offset: 0,
+        }
     }
 
     pub fn load(&self) -> Request {
         let id = self.id;
         let host = self.host.clone();
-        Box::new(move || Message::To(id, Reply::Books(data::books(&host))))
+        Box::new(move || Message::To(id, Reply::BooksLoaded(data::books(&host))))
     }
 
     /// The books as loaded, the selection kept on one of them.
-    pub fn loaded(&mut self, books: anyhow::Result<Vec<BookCard>>) {
-        self.books = Loading::from(books);
-        let count = self.books.ready().map(Vec::len).unwrap_or(0);
-        self.selected = self.selected.min(count.saturating_sub(1));
+    pub fn loaded(&mut self, library: anyhow::Result<Library>) {
+        match library {
+            Ok(library) => {
+                self.can_write = library.can_write;
+                self.books = Loading::Ready(library.books);
+            }
+            Err(error) => self.books = Loading::from(Err(error)),
+        }
+        self.selected = self.selected.min(self.count().saturating_sub(1));
     }
 
     pub fn covers(&self) -> Vec<String> {
-        self.books.ready().into_iter().flatten().filter_map(|book| book.cover.as_ref().map(|cover| cover.url.clone())).collect()
+        self.books
+            .ready()
+            .into_iter()
+            .flatten()
+            .filter_map(|book| book.cover.as_ref().map(|cover| cover.url.clone()))
+            .collect()
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
@@ -67,11 +87,13 @@ impl Books {
             },
             KeyCode::Esc => Action::Back,
             KeyCode::Char('v') => Action::ToggleView,
-            KeyCode::Char('n') => Action::NewBook,
+            KeyCode::Char('n') if self.can_write => Action::NewBook,
             KeyCode::Char('s') => Action::Settings,
-            KeyCode::Char('/') => Action::Overlay(Overlay::Search(Box::new(Search::new(None, "all books".to_string())))),
+            KeyCode::Char('/') => {
+                Action::Overlay(Overlay::Search(Box::new(Search::new(None, "all books".to_string()))))
+            }
             _ => {
-                let count = self.books.ready().map(Vec::len).unwrap_or(0);
+                let count = self.count();
                 views::navigate(key, &mut self.selected, self.columns, count);
                 Action::Nothing
             }
@@ -79,24 +101,33 @@ impl Books {
     }
 
     pub fn bindings(&self, view: View) -> Vec<Binding> {
-        vec![
+        let mut bindings = vec![
             (view.arrows(), "select"),
             ("enter", "open"),
             ("v", view.other_name()),
             ("/", "search"),
-            ("n", "new book"),
+        ];
+
+        if self.can_write {
+            bindings.push(("n", "new book"));
+        }
+
+        bindings.extend([
             ("s", "settings"),
             ("esc", "instances"),
             ("ctrl+i", "instances"),
             ("ctrl+c", "quit"),
-        ]
+        ]);
+        bindings
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, view: View, images: &mut Images) {
-        let body = views::breadcrumbs(frame, area, &[&self.name, "Books"]);
+        let body = views::breadcrumbs(frame, area, &[&self.instance_name, "Books"]);
 
         let books = match &self.books {
-            Loading::Ready(books) if books.is_empty() => return views::placeholder(frame, body, "There are no books here yet."),
+            Loading::Ready(books) if books.is_empty() => {
+                return views::placeholder(frame, body, "There are no books here yet.");
+            }
             Loading::Ready(books) => books,
             Loading::Pending => return views::placeholder(frame, body, "Loading…"),
             Loading::Failed(error) => return views::failure(frame, body, error),
@@ -104,7 +135,15 @@ impl Books {
 
         match view {
             View::Gallery => {
-                let tiles = views::grid(body, TILE_WIDTH, TILE_HEIGHT, books.len(), self.selected, &mut self.columns, &mut self.offset);
+                let tiles = views::grid(
+                    body,
+                    TILE_WIDTH,
+                    TILE_HEIGHT,
+                    books.len(),
+                    self.selected,
+                    &mut self.columns,
+                    &mut self.offset,
+                );
 
                 for (index, tile) in tiles {
                     book_tile(frame, tile, &self.host, &books[index], index == self.selected, images);
@@ -114,7 +153,10 @@ impl Books {
                 let rows: Vec<Row> = books
                     .iter()
                     .map(|book| Row {
-                        left: vec![Span::from(book.title.clone()).bold(), Span::from(byline(book.subtitle.as_deref(), book.author.as_deref())).dim()],
+                        left: vec![
+                            Span::from(book.title.clone()).bold(),
+                            Span::from(byline(book.subtitle.as_deref(), book.author.as_deref())).dim(),
+                        ],
                         right: String::new(),
                         color: theme::color(book.theme.as_deref()),
                         strong: false,
@@ -123,6 +165,13 @@ impl Books {
                 views::list(frame, body, &rows, self.selected, &mut self.offset);
                 self.columns = 1;
             }
+        }
+    }
+
+    fn count(&self) -> usize {
+        match self.books.ready() {
+            Some(books) => books.len(),
+            None => 0,
         }
     }
 }
@@ -146,12 +195,23 @@ fn book_tile(frame: &mut Frame, area: Rect, host: &str, book: &BookCard, selecte
         Line::from(book.subtitle.clone().unwrap_or_default()).dim(),
         Line::from(book.author.clone().unwrap_or_default()).italic().dim(),
     ];
-    frame.render_widget(Paragraph::new(views::in_selection_color(lines, selected, color)), views::beside_gap(text));
+    frame.render_widget(
+        Paragraph::new(views::in_selection_color(lines, selected, color)),
+        views::beside_gap(text),
+    );
 }
 
 fn byline(subtitle: Option<&str>, author: Option<&str>) -> String {
-    let parts: Vec<&str> = [subtitle, author].into_iter().flatten().filter(|it| !it.is_empty()).collect();
-    if parts.is_empty() { String::new() } else { format!("  {}", parts.join(" · ")) }
+    let parts: Vec<&str> = [subtitle, author]
+        .into_iter()
+        .flatten()
+        .filter(|it| !it.is_empty())
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", parts.join(" · "))
+    }
 }
 
 #[cfg(test)]
@@ -170,7 +230,9 @@ mod tests {
             subtitle: subtitle.map(str::to_string),
             author: Some("Ops".to_string()),
             theme: Some("green".to_string()),
-            cover: Some(File { url: "/covers/1".to_string() }),
+            cover: Some(File {
+                url: "/covers/1".to_string(),
+            }),
             editable: true,
         }
     }
@@ -179,8 +241,9 @@ mod tests {
         Books {
             id: 1,
             host: "https://books.example.com".to_string(),
-            name: "books.example.com".to_string(),
+            instance_name: "books.example.com".to_string(),
             books: Loading::Ready(vec![card(1, "Handbook", Some("How we work")), card(2, "Guide", None)]),
+            can_write: true,
             selected: 1,
             columns: 1,
             offset: 0,
@@ -191,9 +254,15 @@ mod tests {
     fn keeps_the_selection_on_a_book_after_a_reload() {
         let mut screen = books_screen();
 
-        screen.loaded(Ok(vec![card(1, "Handbook", None)]));
+        screen.loaded(Ok(Library {
+            books: vec![card(1, "Handbook", None)],
+            can_write: true,
+        }));
         assert_eq!(screen.selected, 0);
-        assert!(matches!(screen.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Action::Open(1)));
+        assert!(matches!(
+            screen.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::Open(1)
+        ));
     }
 
     #[test]
@@ -202,7 +271,9 @@ mod tests {
         let mut screen = books_screen();
         let mut images = Images::none();
 
-        terminal.draw(|frame| screen.draw(frame, frame.area(), View::Gallery, &mut images)).unwrap();
+        terminal
+            .draw(|frame| screen.draw(frame, frame.area(), View::Gallery, &mut images))
+            .unwrap();
         let text = views::screen_text(&terminal);
         let buffer = terminal.backend().buffer();
 
@@ -210,12 +281,22 @@ mod tests {
         assert_eq!(text[4], format!("{}╭{}╮", " ".repeat(24), "─".repeat(20)));
         assert_eq!(text[17], format!("{}╰{}╯", " ".repeat(24), "─".repeat(20)));
         assert_eq!(buffer[(24, 4)].fg, Color::Green);
-        assert_eq!(text[18..21], ["Handbook                Guide", "How we work", "Ops                     Ops"]);
-        assert_eq!(buffer[(24, 18)].fg, Color::Green, "the selected book's title is in its theme's color");
+        assert_eq!(
+            text[18..21],
+            [
+                "Handbook                Guide",
+                "How we work",
+                "Ops                     Ops"
+            ]
+        );
+        assert_eq!(
+            buffer[(24, 18)].fg,
+            Color::Green,
+            "the selected book's title is in its theme's color"
+        );
         assert_eq!(buffer[(24, 20)].fg, Color::Green, "and so is its author");
         assert_eq!(buffer[(0, 18)].fg, Color::Reset);
 
-        // Covers that haven't arrived are drawn in the theme's color, with the title.
         assert_eq!(buffer[(1, 5)].bg, Color::Green);
         assert_eq!(&text[6][2..10], "Handbook");
     }
@@ -226,9 +307,14 @@ mod tests {
         let mut screen = books_screen();
         let mut images = Images::none();
 
-        terminal.draw(|frame| screen.draw(frame, frame.area(), View::List, &mut images)).unwrap();
+        terminal
+            .draw(|frame| screen.draw(frame, frame.area(), View::List, &mut images))
+            .unwrap();
 
-        assert_eq!(views::screen_text(&terminal)[..3], ["─".repeat(60), "books.example.com > Books".to_string(), "─".repeat(60)]);
+        assert_eq!(
+            views::screen_text(&terminal)[..3],
+            ["─".repeat(60), "books.example.com > Books".to_string(), "─".repeat(60)]
+        );
         assert_eq!(
             views::screen_text(&terminal)[4..6],
             [

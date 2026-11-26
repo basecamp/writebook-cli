@@ -23,19 +23,34 @@ pub fn run(url: &str, directory: Option<&Path>) -> Result<()> {
         bail!("{} is a symlink; clone into a directory instead", root.display());
     }
 
-    if root.exists() && fs::read_dir(&root).context("could not inspect the target directory")?.next().is_some() {
+    if root.exists()
+        && fs::read_dir(&root)
+            .context("could not inspect the target directory")?
+            .next()
+            .is_some()
+    {
         bail!("{} already exists and is not empty", root.display());
     }
 
-    crate::output::print_line(&format!("Cloning \"{}\" into {}...", manifest.book.title, root.display()));
+    crate::output::print_line(&format!(
+        "Cloning \"{}\" into {}...",
+        manifest.book.title,
+        root.display()
+    ));
 
     let checkout = Checkout::create(&root)?;
 
     let mut config = Config::default();
-    config.remotes.insert("origin".to_string(), Remote { url: host, book_id });
+    config
+        .remotes
+        .insert("origin".to_string(), Remote { url: host, book_id });
     checkout.save_config(&config)?;
 
-    let mut state = State { version: 1, book_fingerprint: manifest.book.fingerprint.clone(), ..State::default() };
+    let mut state = State {
+        version: 1,
+        book_fingerprint: manifest.book.fingerprint.clone(),
+        ..State::default()
+    };
     let mut taken = vec!["index.md".to_string()];
     let mut entries = Vec::new();
 
@@ -56,8 +71,6 @@ pub fn run(url: &str, directory: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// The book's slug names the directory, but it comes from the server, so it
-/// only gets to name one directory right here.
 fn directory_for(slug: &str, book_id: u64) -> String {
     let name = sync::sanitize_filename(slug);
 

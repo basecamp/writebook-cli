@@ -1,6 +1,6 @@
-//! A checkout on disk: the working files (book.md, index.md, pages, assets/)
-//! plus the .writebook directory holding remotes, sync state, and the base
-//! snapshot that three-way merges use as their common ancestor.
+//! A checkout on disk: the working files (index.md, pages, assets/) plus the
+//! .writebook directory holding remotes, sync state, and the base snapshot
+//! that three-way merges use as their common ancestor.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -65,19 +65,19 @@ impl LeafState {
     /// no line at all.
     pub fn entry(&self) -> Option<crate::index::Entry> {
         match self.kind.as_str() {
-            "Page" => self
-                .filename
-                .clone()
-                .map(|filename| crate::index::Entry::Page { title: self.title.clone(), filename }),
+            "Page" => self.filename.clone().map(|filename| crate::index::Entry::Page {
+                title: self.title.clone(),
+                filename,
+            }),
             "Section" => Some(crate::index::Entry::Section {
                 title: self.title.clone(),
                 filename: self.filename.clone(),
                 theme: self.theme.clone(),
             }),
-            "Picture" => self
-                .filename
-                .clone()
-                .map(|filename| crate::index::Entry::Picture { caption: self.title.clone(), filename }),
+            "Picture" => self.filename.clone().map(|filename| crate::index::Entry::Picture {
+                caption: self.title.clone(),
+                filename,
+            }),
             _ => None,
         }
     }
@@ -92,23 +92,25 @@ impl Checkout {
         let start = std::env::current_dir().context("could not determine the current directory")?;
         let mut directory = start.as_path();
 
-        loop {
-            if directory.join(".writebook").is_dir() {
-                return Ok(Checkout { root: directory.to_path_buf() });
-            }
-
+        while !directory.join(".writebook").is_dir() {
             match directory.parent() {
                 Some(parent) => directory = parent,
                 None => bail!("not inside a writebook checkout — run `writebook clone <url>` first"),
             }
         }
+
+        Ok(Checkout {
+            root: directory.to_path_buf(),
+        })
     }
 
     pub fn create(root: &Path) -> Result<Checkout> {
         fs::create_dir_all(root.join(".writebook/base"))?;
         fs::create_dir_all(root.join("assets"))?;
 
-        let checkout = Checkout { root: root.to_path_buf() };
+        let checkout = Checkout {
+            root: root.to_path_buf(),
+        };
         checkout.ignore_metadata_in_git()?;
         Ok(checkout)
     }
@@ -158,6 +160,19 @@ impl Checkout {
         fsutil::read_to_string(&self.base_path(filename)?)
     }
 
+    pub fn read_working_or_empty(&self, filename: &str) -> Result<String> {
+        fsutil::read_to_string_or_empty(&self.working_path(filename)?)
+    }
+
+    pub fn read_base_or_empty(&self, filename: &str) -> Result<String> {
+        fsutil::read_to_string_or_empty(&self.base_path(filename)?)
+    }
+
+    pub fn remove_working_if_present(&self, filename: &str) -> Result<()> {
+        fsutil::remove_if_present(&self.working_path(filename)?);
+        Ok(())
+    }
+
     pub fn read_working_bytes(&self, filename: &str) -> Result<Vec<u8>> {
         let path = self.working_path(filename)?;
         fs::read(&path).with_context(|| format!("could not read {}", path.display()))
@@ -194,23 +209,24 @@ impl Checkout {
             String::new()
         };
 
-        if existing.lines().any(|line| line.trim() == ".writebook/" || line.trim() == ".writebook") {
-            return Ok(());
+        if existing
+            .lines()
+            .any(|line| line.trim() == ".writebook/" || line.trim() == ".writebook")
+        {
+            Ok(())
+        } else {
+            let mut contents = existing;
+
+            if !contents.is_empty() && !contents.ends_with('\n') {
+                contents.push('\n');
+            }
+
+            contents.push_str(".writebook/\n");
+            fsutil::write_atomically(&path, contents.as_bytes())
         }
-
-        let mut contents = existing;
-
-        if !contents.is_empty() && !contents.ends_with('\n') {
-            contents.push('\n');
-        }
-
-        contents.push_str(".writebook/\n");
-        fsutil::write_atomically(&path, contents.as_bytes())
     }
 }
 
-/// A file in a directory of the checkout, with no symlink anywhere between
-/// the checkout's root and the file.
 fn inside(root: &Path, directory: &str, filename: &str) -> Result<PathBuf> {
     let relative = Path::new(filename);
 
@@ -224,7 +240,10 @@ fn inside(root: &Path, directory: &str, filename: &str) -> Result<PathBuf> {
         path.push(component);
 
         if fs::symlink_metadata(&path).is_ok_and(|it| it.file_type().is_symlink()) {
-            bail!("refusing {}: it's a symlink, and could lead outside the checkout", path.display());
+            bail!(
+                "refusing {}: it's a symlink, and could lead outside the checkout",
+                path.display()
+            );
         }
     }
 
@@ -238,56 +257,6 @@ fn read_json_or_default<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> 
     } else {
         Ok(T::default())
     }
-}
-
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct BookMeta {
-    pub title: String,
-    pub subtitle: String,
-    pub author: String,
-    pub theme: String,
-    /// The cover image in assets/, empty for no cover. None when index.md
-    /// has no `cover:` line (checkouts made before it existed), which leaves
-    /// the cover to the file tracked in state.
-    pub cover: Option<String>,
-}
-
-impl BookMeta {
-    pub fn without_cover(&self) -> BookMeta {
-        BookMeta { cover: None, ..self.clone() }
-    }
-}
-
-pub fn parse_book_md(text: &str) -> BookMeta {
-    let mut meta = BookMeta::default();
-
-    for line in text.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            let value = value.trim().to_string();
-
-            match key.trim() {
-                "title" => meta.title = value,
-                "subtitle" => meta.subtitle = value,
-                "author" => meta.author = value,
-                "theme" => meta.theme = value,
-                "cover" => meta.cover = Some(value),
-                _ => {}
-            }
-        }
-    }
-
-    meta
-}
-
-pub fn serialize_book_md(meta: &BookMeta) -> String {
-    let mut text = format!("---\ntitle: {}\nsubtitle: {}\nauthor: {}\ntheme: {}\n", meta.title, meta.subtitle, meta.author, meta.theme);
-
-    if let Some(cover) = &meta.cover {
-        text.push_str(&format!("cover: {cover}\n"));
-    }
-
-    text.push_str("---\n");
-    text
 }
 
 pub fn slugify(title: &str) -> String {
@@ -304,31 +273,6 @@ pub fn slugify(title: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
-/// A filename nothing else claims yet: the wanted name as-is, or with -2, -3,
-/// ... spliced in before the extension.
-pub fn unique_filename(wanted: &str, taken: &[String]) -> String {
-    if !taken.iter().any(|it| it == wanted) {
-        return wanted.to_string();
-    }
-
-    let (stem, extension) = match wanted.rsplit_once('.') {
-        Some((stem, extension)) => (stem.to_string(), format!(".{extension}")),
-        None => (wanted.to_string(), String::new()),
-    };
-
-    let mut counter = 2;
-
-    loop {
-        let candidate = format!("{stem}-{counter}{extension}");
-
-        if !taken.iter().any(|it| it == &candidate) {
-            return candidate;
-        }
-
-        counter += 1;
-    }
-}
-
 pub fn sha256(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
@@ -340,17 +284,29 @@ pub fn sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::TempDir;
 
     #[test]
     fn keeps_every_file_inside_the_checkout() {
-        let root = std::env::temp_dir().join(format!("writebook-checkout-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = TempDir::new();
         let checkout = Checkout::create(&root).unwrap();
 
-        assert_eq!(checkout.working_path("assets/a.png").unwrap(), root.join("assets/a.png"));
-        assert_eq!(checkout.base_path("intro.md").unwrap(), root.join(".writebook/base/intro.md"));
+        assert_eq!(
+            checkout.working_path("assets/a.png").unwrap(),
+            root.join("assets/a.png")
+        );
+        assert_eq!(
+            checkout.base_path("intro.md").unwrap(),
+            root.join(".writebook/base/intro.md")
+        );
 
-        for filename in ["", "../outside.md", "assets/../../outside.md", "/etc/passwd", "./intro.md"] {
+        for filename in [
+            "",
+            "../outside.md",
+            "assets/../../outside.md",
+            "/etc/passwd",
+            "./intro.md",
+        ] {
             assert!(checkout.working_path(filename).is_err(), "{filename:?}");
             assert!(checkout.base_path(filename).is_err(), "{filename:?}");
         }
@@ -369,7 +325,5 @@ mod tests {
             std::os::unix::fs::symlink(std::env::temp_dir(), root.join(".writebook")).unwrap();
             assert!(checkout.save_state(&State::default()).is_err());
         }
-
-        fs::remove_dir_all(&root).unwrap();
     }
 }

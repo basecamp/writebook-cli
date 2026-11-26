@@ -8,22 +8,20 @@ use crate::plan;
 use crate::sync;
 
 pub fn run(remote: bool) -> Result<()> {
-    if remote {
-        diff_remote()
-    } else {
-        diff_local()
-    }
+    if remote { diff_remote() } else { diff_local() }
 }
 
-/// What you changed since the last sync: base snapshot on the left, working
-/// files on the right.
 fn diff_local() -> Result<()> {
     let checkout = Checkout::find()?;
     let state = checkout.state()?;
     let document = index::parse(&checkout.read_working("index.md")?)?;
     let comparison = plan::compare(&checkout, &state, &document, None)?;
 
-    print_diff("index.md", &checkout.read_base("index.md")?, &checkout.read_working("index.md")?);
+    print_diff(
+        "index.md",
+        &checkout.read_base("index.md")?,
+        &checkout.read_working("index.md")?,
+    );
 
     for compared in &comparison.leaves {
         let Some(filename) = &compared.state.filename else {
@@ -37,13 +35,10 @@ fn diff_local() -> Result<()> {
             continue;
         }
 
-        let base = checkout.read_base(filename).unwrap_or_default();
+        let base = checkout.read_base_or_empty(filename)?;
 
-        let current = match &compared.entry {
-            Some(entry) => match entry.filename() {
-                Some(current_filename) => checkout.read_working(current_filename).unwrap_or_default(),
-                None => String::new(),
-            },
+        let current = match compared.entry.as_ref().and_then(Entry::filename) {
+            Some(current_filename) => checkout.read_working_or_empty(current_filename)?,
             None => String::new(),
         };
 
@@ -53,7 +48,7 @@ fn diff_local() -> Result<()> {
     for entry in &comparison.added_locally {
         if let Some(filename) = entry.filename() {
             if filename.ends_with(".md") {
-                print_diff(filename, "", &checkout.read_working(filename).unwrap_or_default());
+                print_diff(filename, "", &checkout.read_working_or_empty(filename)?);
             } else {
                 println!("binary file {filename} added");
             }
@@ -63,8 +58,6 @@ fn diff_local() -> Result<()> {
     Ok(())
 }
 
-/// What the remote changed since the last sync: base snapshot on the left,
-/// remote content on the right.
 fn diff_remote() -> Result<()> {
     let checkout = Checkout::find()?;
     let origin = checkout.origin()?;
@@ -87,7 +80,10 @@ fn diff_remote() -> Result<()> {
                     "Page" => {
                         let body = merge::localize_upload_urls(&content.body.unwrap_or_default());
                         print_diff(&filename, "", &body);
-                        remote_entries.push(Entry::Page { title: content.title, filename });
+                        remote_entries.push(Entry::Page {
+                            title: content.title,
+                            filename,
+                        });
                     }
                     "Section" => {
                         let body = content.body.unwrap_or_default();
@@ -97,14 +93,19 @@ fn diff_remote() -> Result<()> {
                             print_diff(filename, "", &body);
                         }
 
-                        remote_entries.push(Entry::Section { title: content.title, filename, theme: content.theme });
+                        remote_entries.push(Entry::Section {
+                            title: content.title,
+                            filename,
+                            theme: content.theme,
+                        });
                     }
                     "Picture" => {
                         if let Some(image) = &content.image {
-                            println!("binary file assets/{} added", sync::sanitize_filename(&image.filename));
+                            let filename = sync::picture_filename(image);
+                            println!("binary file {filename} added");
                             remote_entries.push(Entry::Picture {
                                 caption: content.caption.unwrap_or_default(),
-                                filename: format!("assets/{}", sync::sanitize_filename(&image.filename)),
+                                filename,
                             });
                         }
                     }
@@ -120,11 +121,11 @@ fn diff_remote() -> Result<()> {
                     match (known.kind.as_str(), &known.filename) {
                         ("Page", Some(filename)) => {
                             let body = merge::localize_upload_urls(&content.body.clone().unwrap_or_default());
-                            print_diff(filename, &checkout.read_base(filename).unwrap_or_default(), &body);
+                            print_diff(filename, &checkout.read_base_or_empty(filename)?, &body);
                         }
                         ("Section", Some(filename)) => {
                             let body = content.body.clone().unwrap_or_default();
-                            print_diff(filename, &checkout.read_base(filename).unwrap_or_default(), &body);
+                            print_diff(filename, &checkout.read_base_or_empty(filename)?, &body);
                         }
                         ("Picture", Some(filename)) => {
                             if content.image.as_ref().map(|it| &it.checksum) != known.image_remote_checksum.as_ref() {
@@ -144,13 +145,17 @@ fn diff_remote() -> Result<()> {
         }
     }
 
-    print_diff("index.md", &checkout.read_base("index.md")?, &index::serialize(&sync::book_meta(&manifest, &state), &remote_entries));
+    print_diff(
+        "index.md",
+        &checkout.read_base("index.md")?,
+        &index::serialize(&sync::book_meta(&manifest, &state), &remote_entries),
+    );
 
     for compared in &comparison.leaves {
         if compared.deleted_remotely {
             if let Some(filename) = &compared.state.filename {
                 if filename.ends_with(".md") {
-                    print_diff(filename, &checkout.read_base(filename).unwrap_or_default(), "");
+                    print_diff(filename, &checkout.read_base_or_empty(filename)?, "");
                 } else {
                     println!("binary file {filename} deleted");
                 }
@@ -163,13 +168,23 @@ fn diff_remote() -> Result<()> {
 
 fn remote_entry(kind: &str, content: &sync::RemoteLeafContent, filename: Option<String>) -> Option<Entry> {
     match kind {
-        "Page" => filename.map(|filename| Entry::Page { title: content.title.clone(), filename }),
+        "Page" => filename.map(|filename| Entry::Page {
+            title: content.title.clone(),
+            filename,
+        }),
         "Section" => Some(Entry::Section {
             title: content.title.clone(),
-            filename: if content.body.as_deref().unwrap_or_default().is_empty() { None } else { filename },
+            filename: if content.body.as_deref().unwrap_or_default().is_empty() {
+                None
+            } else {
+                filename
+            },
             theme: content.theme.clone(),
         }),
-        "Picture" => filename.map(|filename| Entry::Picture { caption: content.caption.clone().unwrap_or_default(), filename }),
+        "Picture" => filename.map(|filename| Entry::Picture {
+            caption: content.caption.clone().unwrap_or_default(),
+            filename,
+        }),
         _ => None,
     }
 }

@@ -12,7 +12,11 @@ impl TempDir {
 
         let count = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("writebook-unit-test-{}-{count}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("could not clear {}: {error}", dir.display()),
+        }
         std::fs::create_dir_all(&dir).unwrap();
         TempDir(dir)
     }
@@ -28,6 +32,8 @@ impl std::ops::Deref for TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            eprintln!("could not remove {}: {error}", self.0.display());
+        }
     }
 }
