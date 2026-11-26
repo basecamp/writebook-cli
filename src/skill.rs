@@ -72,7 +72,7 @@ fn link_into_claude(home: &Path) -> Result<String> {
     };
 
     if ours {
-        fs::create_dir_all(skill.parent().unwrap())?;
+        fs::create_dir_all(skill.parent().expect("the skill's path is inside ~/.claude/skills"))?;
         fs::write(&skill, SKILL).with_context(|| format!("could not write {}", skill.display()))?;
         Ok("Installed the agent skill for Claude Code to ~/.claude/skills/writebook/SKILL.md".to_string())
     } else {
