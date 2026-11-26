@@ -31,14 +31,29 @@ impl Request {
 pub struct Reply {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,
-    pub body: String,
+    pub body: Vec<u8>,
+    pub length: usize,
 }
 
 pub fn reply(status: u16, body: &str) -> Reply {
+    bytes(status, body.as_bytes())
+}
+
+pub fn bytes(status: u16, body: &[u8]) -> Reply {
     Reply {
         status,
         headers: Vec::new(),
-        body: body.to_string(),
+        body: body.to_vec(),
+        length: body.len(),
+    }
+}
+
+/// A reply whose Content-Length promises more than the body it sends before
+/// closing the connection.
+pub fn cut_short(status: u16, body: &str) -> Reply {
+    Reply {
+        length: body.len() + 100,
+        ..reply(status, body)
     }
 }
 
@@ -56,9 +71,8 @@ pub fn device_authorization(request: &Request) -> Reply {
 
 pub fn redirect(location: &str) -> Reply {
     Reply {
-        status: 302,
         headers: vec![("Location", location.to_string())],
-        body: String::new(),
+        ..reply(302, "")
     }
 }
 
@@ -103,15 +117,14 @@ fn answer(mut stream: std::net::TcpStream, route: &dyn Fn(&Request) -> Reply, se
 
     let mut head = format!(
         "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n",
-        answer.status,
-        answer.body.len()
+        answer.status, answer.length
     );
     for (name, value) in &answer.headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
     head.push_str("\r\n");
 
-    for part in [head.as_bytes(), answer.body.as_bytes()] {
+    for part in [head.as_bytes(), &answer.body] {
         if let Err(error) = stream.write_all(part) {
             eprintln!("client went away before the reply was sent: {error}");
         }

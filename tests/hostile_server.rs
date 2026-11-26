@@ -7,7 +7,7 @@
 #[cfg(test)]
 mod support;
 
-use support::{Server, redirect, reply, stderr, stdout, tempdir, writebook, writebook_in};
+use support::{Server, cut_short, redirect, reply, stderr, stdout, tempdir, writebook, writebook_in};
 
 #[test]
 fn clone_stays_inside_the_checkout() {
@@ -197,8 +197,67 @@ fn prints_no_terminal_escape_sequences_from_the_server() {
     );
 }
 
+#[test]
+fn a_successful_answer_that_isnt_json_is_an_error() {
+    let server = Server::start(|request| match request.path.as_str() {
+        "/books/4/manifest.json" => reply(200, &book_with_a_page()),
+        "/books/4/pages/12.json" => reply(200, r##"{"id":12,"title":"On call","fingerprint":"g","body":"# St"##),
+        _ => reply(404, ""),
+    });
+    let work = tempdir();
+
+    let output = writebook_in(
+        &work,
+        &["clone", &format!("{}/4/handbook", server.url)],
+        &token_for(&server),
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("the answer to /books/4/pages/12.json isn't valid JSON"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stderr(&output).contains("secret"));
+    assert!(!work.join("handbook/index.md").exists());
+}
+
+#[test]
+fn a_successful_answer_cut_short_is_an_error() {
+    let server = Server::start(|request| match request.path.as_str() {
+        "/books/4/manifest.json" => reply(200, &book_with_a_page()),
+        "/books/4/pages/12.json" => cut_short(
+            200,
+            r##"{"id":12,"title":"On call","fingerprint":"g","body":"# Steps"}"##,
+        ),
+        _ => reply(404, ""),
+    });
+    let work = tempdir();
+
+    let output = writebook_in(
+        &work,
+        &["clone", &format!("{}/4/handbook", server.url)],
+        &token_for(&server),
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("could not read the answer to /books/4/pages/12.json"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stderr(&output).contains("secret"));
+    assert!(!work.join("handbook/index.md").exists());
+}
+
 fn token_for(server: &Server) -> [(&str, &str); 2] {
     [("WRITEBOOK_TOKEN", "secret"), ("WRITEBOOK_TOKEN_HOST", &server.url)]
+}
+
+fn book_with_a_page() -> String {
+    r#"{"book":{"id":4,"title":"Handbook","subtitle":null,"author":"Ops","theme":"blue","slug":"handbook","fingerprint":"f","cover":null},
+        "leaves":[{"id":12,"title":"On call","type":"Page","fingerprint":"g"}]}"#
+        .to_string()
 }
 
 fn book_with_a_picture() -> String {

@@ -264,9 +264,8 @@ fn lists_books() {
 fn searches_a_book_like_a_browser_when_there_is_no_token() {
     let server = Server::start(|request| match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/4/book") => Reply {
-            status: 200,
             headers: vec![("Set-Cookie", "_writebook_session=abc; path=/; HttpOnly".to_string())],
-            body: r#"<meta name="csrf-token" content="form+token=" />"#.to_string(),
+            ..reply(200, r#"<meta name="csrf-token" content="form+token=" />"#)
         },
         ("POST", "/books/4/search") => {
             if request.header("Cookie") != Some("_writebook_session=abc")
