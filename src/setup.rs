@@ -32,17 +32,16 @@ pub fn run() -> Result<()> {
 }
 
 fn install_completions() {
-    let Some(shell) = current_shell() else {
-        println!("  Skipped shell completions — couldn't tell your shell from $SHELL.");
-        println!("  Install them manually with `writebook shell-completion install <shell>`.");
-        return;
-    };
-
-    match completions::install(&shell) {
-        Ok(()) => {}
-        Err(error) => {
-            println!("  Skipped {shell} completions ({error:#}).");
-            println!("  Try `writebook shell-completion install {shell}` yourself.");
+    match current_shell() {
+        Some(shell) => {
+            if let Err(error) = completions::install(&shell) {
+                println!("  Skipped {shell} completions ({error:#}).");
+                println!("  Try `writebook shell-completion install {shell}` yourself.");
+            }
+        }
+        None => {
+            println!("  Skipped shell completions — couldn't tell your shell from $SHELL.");
+            println!("  Install them manually with `writebook shell-completion install <shell>`.");
         }
     }
 }

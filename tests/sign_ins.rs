@@ -1,6 +1,9 @@
 //! How sign-ins are kept and given up: only over https, in a folder only you
 //! can read, renewed by one command at a time, and revoked on sign-out.
 
+#![cfg(test)]
+
+#[cfg(test)]
 mod support;
 
 use std::path::Path;
@@ -31,11 +34,23 @@ fn signing_out_revokes_the_sign_in_and_drops_unfinished_ones() {
     let removed = writebook(&["instance", "remove", &server.url], &env);
     assert!(removed.status.success(), "{}", stderr(&removed));
 
-    let revocation = server.requests().into_iter().find(|it| it.path == "/oauth/revocations").expect("a revocation");
+    let revocation = server
+        .requests()
+        .into_iter()
+        .find(|it| it.path == "/oauth/revocations")
+        .expect("a revocation");
     assert!(revocation.body.contains("token=wb_rt_1"), "{}", revocation.body);
-    assert!(revocation.body.contains("client_id=writebook-cli"), "{}", revocation.body);
+    assert!(
+        revocation.body.contains("client_id=writebook-cli"),
+        "{}",
+        revocation.body
+    );
     assert!(!pending_sign_ins(&config).contains("wb_dc_secret"));
-    assert!(!std::fs::read_to_string(config.join("writebook/credentials.json")).unwrap().contains("wb_rt_1"));
+    assert!(
+        !std::fs::read_to_string(config.join("writebook/credentials.json"))
+            .unwrap()
+            .contains("wb_rt_1")
+    );
 }
 
 #[test]
@@ -54,7 +69,11 @@ fn removing_a_profile_leaves_other_unfinished_sign_ins_alone() {
 
     let removed = writebook(&["profile", "remove", "ops"], &env);
     assert!(removed.status.success(), "{}", stderr(&removed));
-    assert!(pending_sign_ins(&config).contains(&format!("{} editor", server.url)), "{}", pending_sign_ins(&config));
+    assert!(
+        pending_sign_ins(&config).contains(&format!("{} editor", server.url)),
+        "{}",
+        pending_sign_ins(&config)
+    );
 }
 
 #[test]
@@ -70,7 +89,12 @@ fn one_command_at_a_time_renews_a_sign_in() {
         .map(|_| {
             let config = config.to_path_buf();
             let url = server.url.clone();
-            std::thread::spawn(move || writebook(&["book", "list", "--instance", &url], &[("XDG_CONFIG_HOME", config.to_str().unwrap())]))
+            std::thread::spawn(move || {
+                writebook(
+                    &["book", "list", "--instance", &url],
+                    &[("XDG_CONFIG_HOME", config.to_str().unwrap())],
+                )
+            })
         })
         .collect();
 
@@ -95,13 +119,29 @@ fn says_so_when_the_sign_in_is_in_a_keyring_out_of_reach() {
 
     let listed = writebook(&["book", "list", "--instance", &server.url], &env);
     assert!(!listed.status.success());
-    assert!(stderr(&listed).contains("is in the system keyring, which this command can't use"), "{}", stderr(&listed));
+    assert!(
+        stderr(&listed).contains("is in the system keyring, which this command can't use"),
+        "{}",
+        stderr(&listed)
+    );
 
     let removed = writebook(&["instance", "remove", &server.url], &env);
     assert!(!removed.status.success());
-    assert!(stderr(&removed).contains("is in the system keyring, which this command can't use"), "{}", stderr(&removed));
-    assert!(std::fs::read_to_string(config.join("writebook/instances.toml")).unwrap().contains(&server.url));
-    assert!(std::fs::read_to_string(config.join("writebook/credentials.json")).unwrap().contains(&format!("{} default", server.url)));
+    assert!(
+        stderr(&removed).contains("is in the system keyring, which this command can't use"),
+        "{}",
+        stderr(&removed)
+    );
+    assert!(
+        std::fs::read_to_string(config.join("writebook/instances.toml"))
+            .unwrap()
+            .contains(&server.url)
+    );
+    assert!(
+        std::fs::read_to_string(config.join("writebook/credentials.json"))
+            .unwrap()
+            .contains(&format!("{} default", server.url))
+    );
     assert!(server.requests().iter().all(|it| it.path != "/oauth/revocations"));
 
     sign_in(&server, &env);
@@ -125,7 +165,14 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
 
     assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777, 0o700);
-    assert_eq!(std::fs::metadata(folder.join("credentials.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        std::fs::metadata(folder.join("credentials.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
 }
 
 #[cfg(windows)]
@@ -135,9 +182,17 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     let config = tempdir();
     let folder = config.join("writebook");
     std::fs::create_dir(&folder).unwrap();
-    let everyone = std::process::Command::new("icacls").arg(&folder).args(["/grant", "*S-1-1-0:(OI)(CI)R"]).output().unwrap();
+    let everyone = std::process::Command::new("icacls")
+        .arg(&folder)
+        .args(["/grant", "*S-1-1-0:(OI)(CI)R"])
+        .output()
+        .unwrap();
     assert!(everyone.status.success());
-    assert!(access_list(&folder).contains("Everyone Allow"), "{}", access_list(&folder));
+    assert!(
+        access_list(&folder).contains("Everyone Allow"),
+        "{}",
+        access_list(&folder)
+    );
 
     sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
 
@@ -145,7 +200,6 @@ fn keeps_sign_ins_in_a_folder_only_you_can_read() {
     assert_eq!(access_list(&folder.join("credentials.json")), owner_only_access_list());
 }
 
-/// Whether it keeps what the folders above allow, then who may do what.
 #[cfg(windows)]
 fn access_list(path: &Path) -> String {
     powershell(
@@ -162,8 +216,6 @@ fn owner_only_access_list() -> String {
     format!("True\r\n{} Allow FullControl\r\n", user.trim())
 }
 
-/// Run from a file, since PowerShell mangles quotes on its command line.
-/// PowerShell 7's module path, inherited in CI, breaks Windows PowerShell's.
 #[cfg(windows)]
 fn powershell(script: &str, argument: &Path) -> String {
     let scratch = tempdir();
@@ -200,19 +252,26 @@ fn never_writes_through_a_file_planted_where_a_temporary_file_goes() {
     sign_in(&server, &[("XDG_CONFIG_HOME", config.to_str().unwrap())]);
 
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
-    assert!(!std::fs::symlink_metadata(folder.join("instances.toml")).unwrap().file_type().is_symlink());
+    assert!(
+        !std::fs::symlink_metadata(folder.join("instances.toml"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
-/// Each sign-in gets wb_at_1 and wb_rt_1, and each renewal the next number. A
-/// refresh token works once, as Writebook's do; the refresh tokens used are
-/// recorded. Renewals take a moment, so two at once overlap.
 fn fake_writebook(refreshes: Arc<Mutex<Vec<String>>>) -> Server {
     let issued = Arc::new(AtomicUsize::new(1));
 
     Server::start(move |request| match (request.method.as_str(), request.path.as_str()) {
         ("POST", "/oauth/device_authorizations") => support::device_authorization(request),
         ("POST", "/oauth/tokens") if request.body.contains("grant_type=refresh_token") => {
-            let token = request.body.split('&').find_map(|it| it.strip_prefix("refresh_token=")).unwrap().to_string();
+            let token = request
+                .body
+                .split('&')
+                .find_map(|it| it.strip_prefix("refresh_token="))
+                .unwrap()
+                .to_string();
             let mut used = refreshes.lock().unwrap();
 
             if used.contains(&token) {
@@ -222,10 +281,18 @@ fn fake_writebook(refreshes: Arc<Mutex<Vec<String>>>) -> Server {
                 drop(used);
                 std::thread::sleep(Duration::from_millis(300));
                 let number = issued.fetch_add(1, Ordering::SeqCst) + 1;
-                reply(200, &format!(r#"{{"access_token":"wb_at_{number}","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_{number}"}}"#))
+                reply(
+                    200,
+                    &format!(
+                        r#"{{"access_token":"wb_at_{number}","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_{number}"}}"#
+                    ),
+                )
             }
         }
-        ("POST", "/oauth/tokens") => reply(200, r#"{"access_token":"wb_at_1","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_1"}"#),
+        ("POST", "/oauth/tokens") => reply(
+            200,
+            r#"{"access_token":"wb_at_1","token_type":"Bearer","expires_in":3600,"refresh_token":"wb_rt_1"}"#,
+        ),
         ("POST", "/oauth/revocations") => reply(200, ""),
         ("GET", "/books.json") if request.header("Authorization").is_some_and(|it| it != "Bearer wb_at_1") => reply(
             200,
@@ -254,7 +321,6 @@ fn expire_sign_ins(config: &Path) {
     std::fs::write(&path, credentials.to_string()).unwrap();
 }
 
-/// As if they were saved to the keyring, which the tests can't reach.
 fn move_sign_ins_to_the_keyring(config: &Path) {
     let path = config.join("writebook/credentials.json");
     let mut credentials: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -266,5 +332,9 @@ fn move_sign_ins_to_the_keyring(config: &Path) {
 }
 
 fn pending_sign_ins(config: &Path) -> String {
-    std::fs::read_to_string(config.join("writebook/pending-sign-ins.json")).unwrap_or_default()
+    match std::fs::read_to_string(config.join("writebook/pending-sign-ins.json")) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("{error}"),
+    }
 }

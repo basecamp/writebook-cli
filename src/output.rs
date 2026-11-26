@@ -51,7 +51,11 @@ struct Envelope<'a, T: Serialize> {
 
 /// Print the data in its envelope, or what the jq filter makes of it.
 pub fn print_json<T: Serialize>(data: &T, breadcrumbs: &[Breadcrumb], jq: Option<&str>) -> Result<()> {
-    let envelope = Envelope { ok: true, data, breadcrumbs };
+    let envelope = Envelope {
+        ok: true,
+        data,
+        breadcrumbs,
+    };
 
     match jq {
         Some(filter) => print_filtered(&serde_json::to_string(&envelope)?, filter),
@@ -64,11 +68,20 @@ pub fn print_json<T: Serialize>(data: &T, breadcrumbs: &[Breadcrumb], jq: Option
 
 /// Columns padded to line up, two spaces apart. The first row is the header.
 pub fn print_table<const COLUMNS: usize>(rows: &[[String; COLUMNS]]) {
-    let rows: Vec<Vec<String>> = rows.iter().map(|row| row.iter().map(|cell| terminal_safe(cell)).collect()).collect();
-    let widths: Vec<usize> = (0..COLUMNS).map(|column| rows.iter().map(|row| row[column].chars().count()).max().unwrap_or(0)).collect();
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(|cell| terminal_safe(cell)).collect())
+        .collect();
+    let widths: Vec<usize> = (0..COLUMNS)
+        .map(|column| rows.iter().map(|row| row[column].chars().count()).max().unwrap_or(0))
+        .collect();
 
     for row in rows {
-        let cells: Vec<String> = row.iter().zip(&widths).map(|(cell, width)| format!("{cell:width$}")).collect();
+        let cells: Vec<String> = row
+            .iter()
+            .zip(&widths)
+            .map(|(cell, width)| format!("{cell:width$}"))
+            .collect();
         println!("{}", cells.join("  ").trim_end());
     }
 }
@@ -87,7 +100,9 @@ pub fn print_text(text: &str) {
 /// server could otherwise send escape sequences that rewrite what the
 /// terminal shows, or worse.
 pub fn terminal_safe(text: &str) -> String {
-    text.chars().filter(|it| !it.is_control() || matches!(it, '\n' | '\t')).collect()
+    text.chars()
+        .filter(|it| !it.is_control() || matches!(it, '\n' | '\t'))
+        .collect()
 }
 
 fn check_filter(filter: &str) -> Result<()> {
@@ -98,7 +113,8 @@ fn check_filter(filter: &str) -> Result<()> {
 fn print_filtered(json: &str, filter: &str) -> Result<()> {
     let arena = Arena::default();
     let compiled = compile(&arena, filter)?;
-    let input = jaq_json::read::parse_single(json.as_bytes()).map_err(|error| anyhow!("could not read the JSON for --jq: {error}"))?;
+    let input = jaq_json::read::parse_single(json.as_bytes())
+        .map_err(|error| anyhow!("could not read the JSON for --jq: {error}"))?;
     let ctx = Ctx::<data::JustLut<Val>>::new(&compiled.lut, Vars::new([]));
 
     for result in compiled.id.run((ctx, input)).map(unwrap_valr) {
@@ -115,8 +131,9 @@ fn compile<'a>(arena: &'a Arena, filter: &'a str) -> Result<jaq_core::Filter<dat
     let defs = jaq_core::defs().chain(jaq_std::defs()).chain(jaq_json::defs());
     let funs = jaq_core::funs().chain(jaq_std::funs()).chain(jaq_json::funs());
 
-    let Ok(modules) = Loader::new(defs).load(arena, File { code: filter, path: () }) else {
-        bail!("--jq '{filter}' is not a valid jq expression");
+    let modules = match Loader::new(defs).load(arena, File { code: filter, path: () }) {
+        Ok(modules) => modules,
+        Err(_) => bail!("--jq '{filter}' is not a valid jq expression"),
     };
 
     match Compiler::default().with_funs(funs).compile(modules) {
@@ -125,7 +142,6 @@ fn compile<'a>(arena: &'a Arena, filter: &'a str) -> Result<jaq_core::Filter<dat
     }
 }
 
-/// jaq writes compact JSON; print it indented, like --json.
 fn pretty(json: &str) -> String {
     match serde_json::from_str::<serde_json::Value>(json) {
         Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| json.to_string()),

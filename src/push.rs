@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use crate::api::{self, ApiError, Part, PartData};
 use crate::checkout::{self, Checkout, LeafState, State};
 use crate::creds;
-use crate::index::{self, Entry};
+use crate::index::{self, BookMeta, Entry};
+use crate::leaf_kind::LeafKind;
 use crate::merge;
 use crate::plan;
 use crate::sync;
@@ -19,7 +20,7 @@ pub fn run() -> Result<()> {
     let checkout = Checkout::find()?;
     let origin = checkout.origin()?;
     creds::ensure_can_write(&origin.url)?;
-    let mut state = checkout.state()?;
+    let state = checkout.state()?;
     let document = index::parse(&checkout.read_working("index.md")?)?;
 
     plan::ensure_no_conflict_markers(&checkout, &document.entries)?;
@@ -32,15 +33,26 @@ pub fn run() -> Result<()> {
         bail!("the remote has changes you don't have yet — run `writebook pull` first");
     }
 
-    if !comparison.changed_locally() {
+    if comparison.changed_locally() {
+        apply_local_changes(&checkout, origin.book_id, state, client, &document, &comparison)
+    } else {
         println!("Nothing to push.");
-        return Ok(());
+        Ok(())
     }
+}
 
+fn apply_local_changes(
+    checkout: &Checkout,
+    book_id: u64,
+    mut state: State,
+    mut client: api::Client,
+    document: &index::Document,
+    comparison: &plan::Comparison,
+) -> Result<()> {
     let mut created: Vec<(Entry, u64)> = Vec::new();
 
     for entry in &comparison.added_locally {
-        let id = create_leaf(&mut client, &checkout, &mut state, origin.book_id, entry)?;
+        let id = create_leaf(&mut client, checkout, &mut state, book_id, entry)?;
         println!("  created: {}", entry.filename().unwrap_or(entry.title()));
         created.push((entry.clone(), id));
     }
@@ -48,14 +60,14 @@ pub fn run() -> Result<()> {
     for compared in &comparison.leaves {
         if compared.changed_locally {
             let entry = compared.entry.clone().expect("a changed leaf still has its entry");
-            update_leaf(&mut client, &checkout, &mut state, origin.book_id, &compared.state, &entry)?;
+            update_leaf(&mut client, checkout, &mut state, book_id, &compared.state, &entry)?;
             println!("  updated: {}", entry.filename().unwrap_or(entry.title()));
         }
     }
 
     for compared in &comparison.leaves {
         if compared.deleted_locally() {
-            client.delete(&sync::leaf_path(origin.book_id, &compared.state.kind, compared.state.id))?;
+            client.delete(&sync::leaf_path(book_id, &compared.state.kind, compared.state.id))?;
             println!("  trashed: {}", compared.state.title);
 
             if let Some(filename) = &compared.state.filename {
@@ -66,8 +78,26 @@ pub fn run() -> Result<()> {
         }
     }
 
-    reorder(&mut client, &mut state, origin.book_id, &document.entries, &comparison, &created)?;
-    push_book(&mut client, &checkout, &mut state, origin.book_id, &document, comparison.book_changed_locally)?;
+    reorder(
+        &mut client,
+        &mut state,
+        book_id,
+        &document.entries,
+        comparison,
+        &created,
+    )?;
+
+    if comparison.book_changed_locally {
+        push_book_metadata(&mut client, &mut state, book_id, &document.meta)?;
+    }
+
+    push_cover(
+        &mut client,
+        checkout,
+        &mut state,
+        book_id,
+        document.meta.cover.as_deref(),
+    )?;
 
     checkout.write_base("index.md", &checkout.read_working("index.md")?)?;
     checkout.save_state(&state)?;
@@ -76,7 +106,13 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State, book_id: u64, entry: &Entry) -> Result<u64> {
+fn create_leaf(
+    client: &mut api::Client,
+    checkout: &Checkout,
+    state: &mut State,
+    book_id: u64,
+    entry: &Entry,
+) -> Result<u64> {
     match entry {
         Entry::Page { title, filename } => {
             let response = client.post(
@@ -87,7 +123,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
             let id = leaf_id(&response)?;
             let mut leaf = LeafState {
                 id,
-                kind: "Page".to_string(),
+                kind: LeafKind::Page,
                 title: title.clone(),
                 fingerprint: fingerprint(&response),
                 filename: Some(filename.clone()),
@@ -118,7 +154,7 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
             let id = leaf_id(&response)?;
             state.leaves.push(LeafState {
                 id,
-                kind: "Section".to_string(),
+                kind: LeafKind::Section,
                 title: title.clone(),
                 fingerprint: fingerprint(&response),
                 filename: filename.clone(),
@@ -131,21 +167,16 @@ fn create_leaf(client: &mut api::Client, checkout: &Checkout, state: &mut State,
         Entry::Picture { caption, filename } => {
             let bytes = std::fs::read(checkout.working_path(filename)?)
                 .with_context(|| format!("could not read {filename}"))?;
-            let basename = filename.strip_prefix("assets/").unwrap_or(filename);
 
             let response = client.post_multipart(
                 &format!("/books/{book_id}/pictures.json"),
-                &[
-                    Part { name: "leaf[title]", filename: None, data: PartData::Text(caption) },
-                    Part { name: "picture[caption]", filename: None, data: PartData::Text(caption) },
-                    Part { name: "picture[image]", filename: Some(basename), data: PartData::Bytes(&bytes) },
-                ],
+                &picture_parts(caption, filename, &bytes),
             )?;
 
             let id = leaf_id(&response)?;
             state.leaves.push(LeafState {
                 id,
-                kind: "Picture".to_string(),
+                kind: LeafKind::Picture,
                 title: caption.clone(),
                 fingerprint: fingerprint(&response),
                 filename: Some(filename.clone()),
@@ -182,7 +213,7 @@ fn update_leaf(
 
             let response = guarded_patch(
                 client,
-                &sync::leaf_path(book_id, "Section", known.id),
+                &sync::leaf_path(book_id, &LeafKind::Section, known.id),
                 &json!({
                     "leaf": { "title": title },
                     "section": section_params(&body, theme),
@@ -207,21 +238,18 @@ fn update_leaf(
             let image_changed = Some(checkout::sha256(&bytes)) != known.image_sha256;
 
             let response = if image_changed {
-                let basename = filename.strip_prefix("assets/").unwrap_or(filename);
+                let mut parts = picture_parts(caption, filename, &bytes);
+                parts.push(Part {
+                    name: "base_fingerprint",
+                    filename: None,
+                    data: PartData::Text(&known.fingerprint),
+                });
 
-                guarded(client.patch_multipart(
-                    &sync::leaf_path(book_id, "Picture", known.id),
-                    &[
-                        Part { name: "leaf[title]", filename: None, data: PartData::Text(caption) },
-                        Part { name: "picture[caption]", filename: None, data: PartData::Text(caption) },
-                        Part { name: "picture[image]", filename: Some(basename), data: PartData::Bytes(&bytes) },
-                        Part { name: "base_fingerprint", filename: None, data: PartData::Text(&known.fingerprint) },
-                    ],
-                ))?
+                guarded(client.patch_multipart(&sync::leaf_path(book_id, &LeafKind::Picture, known.id), &parts))?
             } else {
                 guarded_patch(
                     client,
-                    &sync::leaf_path(book_id, "Picture", known.id),
+                    &sync::leaf_path(book_id, &LeafKind::Picture, known.id),
                     &json!({
                         "leaf": { "title": caption },
                         "picture": { "caption": caption },
@@ -234,7 +262,10 @@ fn update_leaf(
             leaf.title = caption.clone();
             leaf.filename = Some(filename.clone());
             leaf.fingerprint = fingerprint(&response);
-            leaf.image_remote_checksum = response["image"]["checksum"].as_str().map(str::to_string).or(leaf.image_remote_checksum);
+            leaf.image_remote_checksum = response["image"]["checksum"]
+                .as_str()
+                .map(str::to_string)
+                .or(leaf.image_remote_checksum);
             leaf.image_sha256 = Some(checkout::sha256(&bytes));
             update_state_leaf(state, leaf);
         }
@@ -243,8 +274,26 @@ fn update_leaf(
     Ok(())
 }
 
-/// A section's body, and its theme when index.md names one. Without one the
-/// server keeps the section's current theme.
+fn picture_parts<'a>(caption: &'a str, filename: &'a str, bytes: &'a [u8]) -> Vec<Part<'a>> {
+    vec![
+        Part {
+            name: "leaf[title]",
+            filename: None,
+            data: PartData::Text(caption),
+        },
+        Part {
+            name: "picture[caption]",
+            filename: None,
+            data: PartData::Text(caption),
+        },
+        Part {
+            name: "picture[image]",
+            filename: Some(filename.strip_prefix("assets/").unwrap_or(filename)),
+            data: PartData::Bytes(bytes),
+        },
+    ]
+}
+
 fn section_params(body: &str, theme: &Option<String>) -> serde_json::Value {
     match theme {
         Some(theme) => json!({ "body": body, "theme": theme }),
@@ -252,9 +301,6 @@ fn section_params(body: &str, theme: &Option<String>) -> serde_json::Value {
     }
 }
 
-/// Upload the page's body: any new or changed local image in assets/ goes up
-/// first (renamed locally to the slug the server hands back), then the body
-/// itself with its asset paths translated back to /u/ URLs.
 fn push_page_body(
     client: &mut api::Client,
     checkout: &Checkout,
@@ -266,8 +312,11 @@ fn push_page_body(
     let filename = entry.filename().expect("a page always has a file").to_string();
     let mut body = checkout.read_working(&filename)?;
 
-    let shown = client.get(&sync::leaf_path(book_id, "Page", leaf.id))?;
-    let record_gid = shown["record_gid"].as_str().context("the server sent no upload gid")?.to_string();
+    let shown = client.get(&sync::leaf_path(book_id, &LeafKind::Page, leaf.id))?;
+    let record_gid = shown["record_gid"]
+        .as_str()
+        .context("the server sent no upload gid")?
+        .to_string();
 
     let mut renamed = false;
 
@@ -283,9 +332,21 @@ fn push_page_body(
         let response = client.post_multipart(
             "/uploads",
             &[
-                Part { name: "record_gid", filename: None, data: PartData::Text(&record_gid) },
-                Part { name: "attribute_name", filename: None, data: PartData::Text("body") },
-                Part { name: "file", filename: Some(&name), data: PartData::Bytes(&bytes) },
+                Part {
+                    name: "record_gid",
+                    filename: None,
+                    data: PartData::Text(&record_gid),
+                },
+                Part {
+                    name: "attribute_name",
+                    filename: None,
+                    data: PartData::Text("body"),
+                },
+                Part {
+                    name: "file",
+                    filename: Some(&name),
+                    data: PartData::Bytes(&bytes),
+                },
             ],
         )?;
 
@@ -318,7 +379,7 @@ fn push_page_body(
 
     let response = guarded_patch(
         client,
-        &sync::leaf_path(book_id, "Page", leaf.id),
+        &sync::leaf_path(book_id, &LeafKind::Page, leaf.id),
         &json!({
             "leaf": { "title": leaf.title },
             "page": { "body": merge::globalize_upload_urls(&body) },
@@ -331,11 +392,10 @@ fn push_page_body(
     Ok(())
 }
 
-/// index.md uses this file as the cover or a picture, so renaming it for a
-/// page would break that line.
 fn index_uses(checkout: &Checkout, filename: &str) -> Result<bool> {
     let document = index::parse(&checkout.read_working("index.md")?)?;
-    Ok(document.meta.cover.as_deref() == Some(filename) || document.entries.iter().any(|it| it.filename() == Some(filename)))
+    Ok(document.meta.cover.as_deref() == Some(filename)
+        || document.entries.iter().any(|it| it.filename() == Some(filename)))
 }
 
 fn reorder(
@@ -368,52 +428,52 @@ fn reorder(
         }
     }
 
-    let synced: Vec<u64> = state.leaves.iter().map(|it| it.id).filter(|it| desired.contains(it)).collect();
+    let synced: Vec<u64> = state
+        .leaves
+        .iter()
+        .map(|it| it.id)
+        .filter(|it| desired.contains(it))
+        .collect();
 
     if desired != synced {
-        client.post(&format!("/books/{book_id}/leaves/moves.json"), &json!({ "id": desired, "position": 0 }))?;
+        client.post(
+            &format!("/books/{book_id}/leaves/moves.json"),
+            &json!({ "id": desired, "position": 0 }),
+        )?;
         println!("  reordered");
     }
 
-    state.leaves.sort_by_key(|leaf| desired.iter().position(|it| *it == leaf.id).unwrap_or(usize::MAX));
+    state
+        .leaves
+        .sort_by_key(|leaf| desired.iter().position(|it| *it == leaf.id).unwrap_or(usize::MAX));
     Ok(())
 }
 
-fn push_book(
+fn push_book_metadata(client: &mut api::Client, state: &mut State, book_id: u64, meta: &BookMeta) -> Result<()> {
+    let response = client.patch(
+        &format!("/books/{book_id}.json"),
+        &json!({
+            "book": {
+                "title": meta.title,
+                "subtitle": meta.subtitle,
+                "author": meta.author,
+                "theme": meta.theme,
+            }
+        }),
+    )?;
+
+    state.book_fingerprint = fingerprint(&response);
+    println!("  updated: book metadata");
+    Ok(())
+}
+
+fn push_cover(
     client: &mut api::Client,
     checkout: &Checkout,
     state: &mut State,
     book_id: u64,
-    document: &index::Document,
-    changed: bool,
+    cover: Option<&str>,
 ) -> Result<()> {
-    if changed {
-        let meta = &document.meta;
-
-        let response = client.patch(
-            &format!("/books/{book_id}.json"),
-            &json!({
-                "book": {
-                    "title": meta.title,
-                    "subtitle": meta.subtitle,
-                    "author": meta.author,
-                    "theme": meta.theme,
-                }
-            }),
-        )?;
-
-        state.book_fingerprint = fingerprint(&response);
-        println!("  updated: book metadata");
-    }
-
-    push_cover(client, checkout, state, book_id, document.meta.cover.as_deref())
-}
-
-/// Bring the remote cover in line with index.md's `cover:` line: upload the
-/// named file when it's new or changed, or remove the cover when the line is
-/// empty. Without a `cover:` line, the tracked cover file decides, and a
-/// deleted file removes the cover.
-fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, book_id: u64, cover: Option<&str>) -> Result<()> {
     match cover {
         Some("") => {
             if state.cover.is_some() {
@@ -421,7 +481,8 @@ fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, 
             }
         }
         Some(filename) => {
-            let bytes = std::fs::read(checkout.working_path(filename)?).with_context(|| format!("could not read the cover, {filename}"))?;
+            let bytes = std::fs::read(checkout.working_path(filename)?)
+                .with_context(|| format!("could not read the cover, {filename}"))?;
             upload_cover(client, state, book_id, filename, &bytes)?;
         }
         None => {
@@ -440,20 +501,33 @@ fn push_cover(client: &mut api::Client, checkout: &Checkout, state: &mut State, 
 fn upload_cover(client: &mut api::Client, state: &mut State, book_id: u64, filename: &str, bytes: &[u8]) -> Result<()> {
     let sha256 = checkout::sha256(bytes);
 
-    if state.cover.as_ref().is_some_and(|it| it.filename == filename && it.sha256 == sha256) {
-        return Ok(());
+    let unchanged = state
+        .cover
+        .as_ref()
+        .is_some_and(|it| it.filename == filename && it.sha256 == sha256);
+
+    if unchanged {
+        Ok(())
+    } else {
+        let basename = filename.strip_prefix("assets/").unwrap_or(filename);
+        let response = client.patch_multipart(
+            &format!("/books/{book_id}.json"),
+            &[Part {
+                name: "book[cover]",
+                filename: Some(basename),
+                data: PartData::Bytes(bytes),
+            }],
+        )?;
+
+        state.cover = Some(checkout::CoverState {
+            filename: filename.to_string(),
+            remote_checksum: String::new(),
+            sha256,
+        });
+        record_remote_cover(client, state, book_id, &fingerprint(&response))?;
+        println!("  updated: cover");
+        Ok(())
     }
-
-    let basename = filename.strip_prefix("assets/").unwrap_or(filename);
-    let response = client.patch_multipart(
-        &format!("/books/{book_id}.json"),
-        &[Part { name: "book[cover]", filename: Some(basename), data: PartData::Bytes(bytes) }],
-    )?;
-
-    state.cover = Some(checkout::CoverState { filename: filename.to_string(), remote_checksum: String::new(), sha256 });
-    record_remote_cover(client, state, book_id, &fingerprint(&response))?;
-    println!("  updated: cover");
-    Ok(())
 }
 
 fn remove_cover(client: &mut api::Client, state: &mut State, book_id: u64) -> Result<()> {
@@ -464,11 +538,12 @@ fn remove_cover(client: &mut api::Client, state: &mut State, book_id: u64) -> Re
     Ok(())
 }
 
-/// Changing the cover changes the book's fingerprint, and the server names
-/// the cover's checksum only in the manifest. Take the checksum from the
-/// manifest only when the book is still as this push left it. If someone
-/// changed it in between, the next pull brings that change in.
-fn record_remote_cover(client: &mut api::Client, state: &mut State, book_id: u64, book_fingerprint: &str) -> Result<()> {
+fn record_remote_cover(
+    client: &mut api::Client,
+    state: &mut State,
+    book_id: u64,
+    book_fingerprint: &str,
+) -> Result<()> {
     state.book_fingerprint = book_fingerprint.to_string();
     let manifest = sync::fetch_manifest(client, book_id)?;
 
@@ -485,7 +560,6 @@ fn guarded_patch(client: &mut api::Client, path: &str, body: &Value) -> Result<V
     guarded(client.patch(path, body))
 }
 
-/// Translate the server's stale-write refusal into the advice that fixes it.
 fn guarded(response: Result<Value>) -> Result<Value> {
     match response {
         Err(error) if error.downcast_ref::<ApiError>().is_some_and(|it| it.status == 409) => {
@@ -496,10 +570,12 @@ fn guarded(response: Result<Value>) -> Result<Value> {
 }
 
 fn update_state_leaf(state: &mut State, leaf: LeafState) {
-    match state.leaves.iter_mut().find(|it| it.id == leaf.id) {
-        Some(existing) => *existing = leaf,
-        None => state.leaves.push(leaf),
-    }
+    let synced = state
+        .leaves
+        .iter_mut()
+        .find(|it| it.id == leaf.id)
+        .expect("an updated leaf is one the checkout already tracks");
+    *synced = leaf;
 }
 
 fn leaf_id(response: &Value) -> Result<u64> {

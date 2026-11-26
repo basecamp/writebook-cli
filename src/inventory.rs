@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::{creds, fsutil, web};
+use crate::{config, fsutil, web};
 
 pub const DEFAULT_PROFILE: &str = "default";
 
@@ -49,7 +49,7 @@ impl Inventory {
     /// change, and save it, so two commands running at once don't overwrite
     /// each other's changes.
     pub fn update<T>(change: impl FnOnce(&mut Inventory) -> Result<T>) -> Result<T> {
-        let lock = lock_file()?;
+        let lock = config::lock_file("instances.lock")?;
         lock.lock().context("could not lock the instance list")?;
 
         let mut inventory = Inventory::load()?;
@@ -66,7 +66,8 @@ impl Inventory {
             None => bail!("which instance? Pass --instance, or add one with `writebook instance add <url>`"),
         };
 
-        self.lookup(name).with_context(|| format!("there is no instance '{name}'. See them with `writebook instance list`"))
+        self.lookup(name)
+            .with_context(|| format!("there is no instance '{name}'. See them with `writebook instance list`"))
     }
 
     pub fn find_mut(&mut self, instance: Option<&str>) -> Result<(String, &mut Instance)> {
@@ -76,17 +77,18 @@ impl Inventory {
     }
 
     pub fn add_profile(&mut self, alias: &str, profile: &str) -> Result<()> {
-        let instance = self.instances.get_mut(alias).with_context(|| format!("instance '{alias}' was removed while signing in"))?;
-
-        if !instance.profiles.iter().any(|it| it == profile) {
-            instance.profiles.push(profile.to_string());
-        }
+        self.instances
+            .get_mut(alias)
+            .with_context(|| format!("instance '{alias}' was removed while signing in"))?
+            .add_profile(profile);
 
         Ok(())
     }
 
     pub fn lookup(&self, name: &str) -> Option<(&String, &Instance)> {
-        self.instances.get_key_value(name).or_else(|| self.for_host(&host_of(name).ok()?))
+        self.instances
+            .get_key_value(name)
+            .or_else(|| self.for_host(&host_of(name).ok()?))
     }
 
     fn for_host(&self, host: &str) -> Option<(&String, &Instance)> {
@@ -94,10 +96,21 @@ impl Inventory {
     }
 }
 
+impl Instance {
+    pub fn add_profile(&mut self, profile: &str) {
+        if !self.profiles.iter().any(|it| it == profile) {
+            self.profiles.push(profile.to_string());
+        }
+    }
+}
+
 /// Use this profile instead of each instance's default one.
 pub fn select_profile(profile: Option<&str>) {
     if let Some(profile) = profile.map(str::trim).filter(|it| !it.is_empty()) {
-        let _ = SELECTED_PROFILE.set(profile.to_string());
+        match SELECTED_PROFILE.set(profile.to_string()) {
+            Ok(()) => {}
+            Err(_already_set) => {}
+        }
     }
 }
 
@@ -122,7 +135,9 @@ pub fn profile_for(host: &str) -> Result<String> {
             if instance.profiles.contains(profile) {
                 Ok(profile.clone())
             } else {
-                bail!("instance '{alias}' has no profile '{profile}'. Add it with `writebook profile add {profile} --instance {alias}`")
+                bail!(
+                    "instance '{alias}' has no profile '{profile}'. Add it with `writebook profile add {profile} --instance {alias}`"
+                )
             }
         }
         (Some((_, instance)), None) => Ok(instance.default_profile.clone()),
@@ -134,22 +149,12 @@ pub fn profile_for(host: &str) -> Result<String> {
 /// What to call a site in a suggested command: its alias when it's in the
 /// inventory, otherwise its URL.
 pub fn name_for(host: &str) -> String {
-    let inventory = Inventory::load().unwrap_or_default();
-
-    match inventory.for_host(host) {
-        Some((alias, _)) => alias.clone(),
-        None => host.to_string(),
-    }
+    suggested_instance(host).0
 }
 
 /// The command that signs in to this site as this profile.
 pub fn sign_in_command(host: &str, profile: &str) -> String {
-    let inventory = Inventory::load().unwrap_or_default();
-
-    let (instance, default_profile) = match inventory.for_host(host) {
-        Some((alias, instance)) => (alias.as_str(), instance.default_profile.as_str()),
-        None => (host, DEFAULT_PROFILE),
-    };
+    let (instance, default_profile) = suggested_instance(host);
 
     if profile == default_profile {
         format!("writebook instance add {instance}")
@@ -158,26 +163,28 @@ pub fn sign_in_command(host: &str, profile: &str) -> String {
     }
 }
 
-/// The canonical site address in a URL, like https://books.example.com. A
-/// bare host name is taken to be https.
-pub fn host_of(url: &str) -> Result<String> {
-    if url.contains("://") {
-        Ok(web::parse_target(url)?.host)
-    } else {
-        Ok(web::parse_target(&format!("https://{url}"))?.host)
+fn suggested_instance(host: &str) -> (String, String) {
+    match Inventory::load() {
+        Ok(inventory) => match inventory.for_host(host) {
+            Some((alias, instance)) => (alias.clone(), instance.default_profile.clone()),
+            None => (host.to_string(), DEFAULT_PROFILE.to_string()),
+        },
+        Err(_unreadable) => (host.to_string(), DEFAULT_PROFILE.to_string()),
     }
 }
 
-fn path() -> Result<PathBuf> {
-    Ok(creds::config_dir()?.join("instances.toml"))
+/// The canonical site address in a URL, like https://books.example.com. A
+/// bare host name is taken to be https.
+pub fn host_of(url: &str) -> Result<String> {
+    let url = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+
+    Ok(web::parse_target(&url)?.host)
 }
 
-fn lock_file() -> Result<std::fs::File> {
-    let path = creds::config_dir()?.join("instances.lock");
-    std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("could not open {}", path.display()))
+fn path() -> Result<PathBuf> {
+    Ok(config::dir()?.join("instances.toml"))
 }

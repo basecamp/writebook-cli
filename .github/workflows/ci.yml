@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  # Clippy and every test, including tests/live.rs against the latest image of
+  # The lints and every test, including tests/live.rs against the latest image of
   # basecamp/writebook main, seeded with tests/support/seed.rb.
   test:
     runs-on: ubuntu-latest
@@ -31,10 +31,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: stable
-          components: clippy
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -42,7 +39,7 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: bin/dev code lint
       - name: Wait for Writebook
         run: |
           for _ in $(seq 1 60); do
@@ -53,7 +50,7 @@ jobs:
           exit 1
       - name: Seed books
         run: docker exec -i "${{ job.services.writebook.id }}" bin/rails runner - < tests/support/seed.rb
-      - run: cargo test --locked
+      - run: bin/dev test run
         env:
           WRITEBOOK_LIVE_URL: http://localhost:3000
 
@@ -77,4 +74,7 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --locked --test sign_ins
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --locked --profile ci --test sign_ins

@@ -5,18 +5,30 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::creds;
-use crate::output::{self, Breadcrumb, Format};
 use crate::inventory::{DEFAULT_PROFILE, Instance, Inventory, host_of};
+use crate::output::{self, Breadcrumb, Format};
 
 /// Sign in to an instance and keep it in the inventory. Adding one that's
 /// already there signs in to it again, or adds the profile when it's new.
-pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Option<&str>, access: creds::Access) -> Result<()> {
+pub fn add(
+    target: &str,
+    alias: Option<&str>,
+    profile: Option<&str>,
+    code: Option<&str>,
+    access: creds::Access,
+) -> Result<()> {
     let inventory = Inventory::load()?;
 
-    match inventory.lookup(target).map(|(alias, instance)| (alias.clone(), instance.clone())) {
+    match inventory
+        .lookup(target)
+        .map(|(alias, instance)| (alias.clone(), instance.clone()))
+    {
         Some((existing, instance)) => {
             if let Some(alias) = alias.filter(|it| *it != existing) {
-                bail!("{} is already in the inventory as '{existing}', not '{alias}'", instance.url);
+                bail!(
+                    "{} is already in the inventory as '{existing}', not '{alias}'",
+                    instance.url
+                );
             }
 
             let profile = profile.unwrap_or(&instance.default_profile);
@@ -28,14 +40,19 @@ pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Optio
         }
         None => {
             let host = host_of(target)?;
-            let alias = alias.map(str::to_string).unwrap_or_else(|| host.split("://").nth(1).unwrap_or(&host).to_string());
+            let alias = match alias {
+                Some(alias) => alias.to_string(),
+                None => host.split("://").nth(1).unwrap_or(&host).to_string(),
+            };
             let profile = profile.unwrap_or(DEFAULT_PROFILE);
 
             if alias.contains("://") {
                 bail!("'{alias}' looks like a URL; an alias is a short name, like work");
             }
 
-            ensure_alias_free(&inventory, &alias)?;
+            if inventory.instances.contains_key(&alias) {
+                bail!("there already is an instance called '{alias}'. Pick another with --alias");
+            }
 
             if creds::sign_in(&host, profile, code, access)? {
                 record_sign_in(&alias, &host, profile)?;
@@ -47,16 +64,10 @@ pub fn add(target: &str, alias: Option<&str>, profile: Option<&str>, code: Optio
     Ok(())
 }
 
-/// Add the instance and profile after signing in. Signing in can take
-/// minutes, so this checks the latest inventory again.
 fn record_sign_in(alias: &str, host: &str, profile: &str) -> Result<()> {
     Inventory::update(|inventory| {
         match inventory.instances.get_mut(alias) {
-            Some(instance) if instance.url == host => {
-                if !instance.profiles.iter().any(|it| it == profile) {
-                    instance.profiles.push(profile.to_string());
-                }
-            }
+            Some(instance) if instance.url == host => instance.add_profile(profile),
             Some(_) => bail!("there already is an instance called '{alias}'. Pick another with --alias"),
             None => {
                 if let Some((existing, _)) = inventory.instances.iter().find(|(_, instance)| instance.url == host) {
@@ -65,7 +76,11 @@ fn record_sign_in(alias: &str, host: &str, profile: &str) -> Result<()> {
 
                 inventory.instances.insert(
                     alias.to_string(),
-                    Instance { url: host.to_string(), default_profile: profile.to_string(), profiles: vec![profile.to_string()] },
+                    Instance {
+                        url: host.to_string(),
+                        default_profile: profile.to_string(),
+                        profiles: vec![profile.to_string()],
+                    },
                 );
                 inventory.default.get_or_insert_with(|| alias.to_string());
             }
@@ -73,14 +88,6 @@ fn record_sign_in(alias: &str, host: &str, profile: &str) -> Result<()> {
 
         Ok(())
     })
-}
-
-fn ensure_alias_free(inventory: &Inventory, alias: &str) -> Result<()> {
-    if inventory.instances.contains_key(alias) {
-        bail!("there already is an instance called '{alias}'. Pick another with --alias");
-    }
-
-    Ok(())
 }
 
 #[derive(Serialize)]
@@ -135,8 +142,16 @@ pub fn list(format: Format) -> Result<()> {
     match format {
         Format::Json { jq } => {
             let breadcrumbs = [
-                Breadcrumb { action: "books", command: "writebook book list --instance <alias>".to_string(), description: "List an instance's books" },
-                Breadcrumb { action: "add", command: "writebook instance add <url>".to_string(), description: "Sign in to another instance" },
+                Breadcrumb {
+                    action: "books",
+                    command: "writebook book list --instance <alias>".to_string(),
+                    description: "List an instance's books",
+                },
+                Breadcrumb {
+                    action: "add",
+                    command: "writebook instance add <url>".to_string(),
+                    description: "Sign in to another instance",
+                },
                 Breadcrumb {
                     action: "set_default",
                     command: "writebook instance set-default <alias>".to_string(),
@@ -155,7 +170,10 @@ pub fn list(format: Format) -> Result<()> {
 
 fn print_table(rows: &[Row]) {
     let mut cells = vec![["Alias".to_string(), "URL".to_string(), "Status".to_string()]];
-    cells.extend(rows.iter().map(|row| [row.alias_cell(), row.url.clone(), row.status_cell()]));
+    cells.extend(
+        rows.iter()
+            .map(|row| [row.alias_cell(), row.url.clone(), row.status_cell()]),
+    );
     output::print_table(&cells);
 }
 
@@ -167,7 +185,9 @@ fn print_markdown(rows: &[Row]) {
 
 pub fn remove(instance: &str) -> Result<()> {
     let (alias, removed) = Inventory::update(|inventory| {
-        let (alias, removed) = inventory.find(Some(instance)).map(|(alias, removed)| (alias.clone(), removed.clone()))?;
+        let (alias, removed) = inventory
+            .find(Some(instance))
+            .map(|(alias, removed)| (alias.clone(), removed.clone()))?;
 
         for profile in &removed.profiles {
             creds::forget(&removed.url, profile)?;

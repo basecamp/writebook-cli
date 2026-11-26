@@ -1,0 +1,6 @@
+min_version = "2026.9.1"
+
+[tools]
+rust = { version = "1.99.1", components = "clippy,rustfmt" }
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.148"
+"aqua:charmbracelet/gum" = "2.0.0"

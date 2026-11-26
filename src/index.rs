@@ -3,35 +3,63 @@
 //! per leaf, and line order is leaf order. Sections are headings (linked to a
 //! file when they have body text of their own), pages are links, and pictures
 //! are images whose alt text is the caption. A section can end with a
-//! `{theme=...}` attribute, and the front matter can name a cover image:
+//! `{theme=...}` attribute, and the front matter can name a cover image.
 //!
-//!   ---
-//!   title: The Field Guide
-//!   subtitle:
-//!   author: Stanko
-//!   theme: green
-//!   cover: assets/cover.jpg
-//!   ---
+//! The front matter sits between two lines of three dashes and has the keys
+//! `title`, `subtitle`, `author`, `theme` and, optionally, `cover`, whose
+//! value is an image path like `assets/cover.jpg`. The entries below it look
+//! like this:
 //!
-//!   # Part One {theme=blue}
-//!   # [Part Two](part-two.md)
-//!   [Getting Started](getting-started.md)
-//!   ![A sunset over the bay](assets/sunset.jpg)
+//! - `# Part One {theme=blue}`, a section without a file
+//! - `# [Part Two](part-two.md)`, a section with a file
+//! - `[Getting Started](getting-started.md)`, a page
+//! - `![A sunset over the bay](assets/sunset.jpg)`, a picture
 
 use anyhow::{Context, Result, bail};
 
-use crate::checkout::BookMeta;
+use crate::leaf_kind::LeafKind;
 
 pub struct Document {
     pub meta: BookMeta,
     pub entries: Vec<Entry>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct BookMeta {
+    pub title: String,
+    pub subtitle: String,
+    pub author: String,
+    pub theme: String,
+    /// The cover image in assets/, empty for no cover. None when index.md
+    /// has no `cover:` line (checkouts made before it existed), which leaves
+    /// the cover to the file tracked in state.
+    pub cover: Option<String>,
+}
+
+impl BookMeta {
+    pub fn without_cover(&self) -> BookMeta {
+        BookMeta {
+            cover: None,
+            ..self.clone()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
-    Section { title: String, filename: Option<String>, theme: Option<String> },
-    Page { title: String, filename: String },
-    Picture { caption: String, filename: String },
+    Section {
+        title: String,
+        filename: Option<String>,
+        theme: Option<String>,
+    },
+    Page {
+        title: String,
+        filename: String,
+    },
+    Picture {
+        caption: String,
+        filename: String,
+    },
 }
 
 impl Entry {
@@ -51,11 +79,11 @@ impl Entry {
         }
     }
 
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> LeafKind {
         match self {
-            Entry::Section { .. } => "Section",
-            Entry::Page { .. } => "Page",
-            Entry::Picture { .. } => "Picture",
+            Entry::Section { .. } => LeafKind::Section,
+            Entry::Page { .. } => LeafKind::Page,
+            Entry::Picture { .. } => LeafKind::Picture,
         }
     }
 }
@@ -82,14 +110,10 @@ pub fn parse(text: &str) -> Result<Document> {
         }
     }
 
-    Ok(Document { meta: crate::checkout::parse_book_md(meta_text), entries })
-}
-
-pub fn serialize(meta: &BookMeta, entries: &[Entry]) -> String {
-    let mut text = crate::checkout::serialize_book_md(meta);
-    text.push('\n');
-    text.push_str(&serialize_entries(entries));
-    text
+    Ok(Document {
+        meta: parse_meta(meta_text),
+        entries,
+    })
 }
 
 fn split_front_matter(text: &str) -> Result<(&str, &str)> {
@@ -101,8 +125,103 @@ fn split_front_matter(text: &str) -> Result<(&str, &str)> {
         .find("\n---")
         .context("index.md front matter is missing its closing ---")?;
 
-    let contents = after_opening[closing + 4..].strip_prefix('\n').unwrap_or(&after_opening[closing + 4..]);
+    let contents = after_opening[closing + 4..]
+        .strip_prefix('\n')
+        .unwrap_or(&after_opening[closing + 4..]);
     Ok((&after_opening[..closing], contents))
+}
+
+fn parse_line(line: &str) -> Option<Entry> {
+    if let Some(heading) = line.strip_prefix('#') {
+        let (heading, theme) = split_theme(heading.trim_start_matches('#').trim());
+
+        if let Some(rest) = heading.strip_prefix('[') {
+            let (title, filename) = split_link(rest)?;
+            Some(Entry::Section {
+                title,
+                filename: Some(filename),
+                theme,
+            })
+        } else {
+            Some(Entry::Section {
+                title: heading.to_string(),
+                filename: None,
+                theme,
+            })
+        }
+    } else if let Some(rest) = line.strip_prefix("![") {
+        let (caption, filename) = split_link(rest)?;
+        Some(Entry::Picture { caption, filename })
+    } else if let Some(rest) = line.strip_prefix('[') {
+        let (title, filename) = split_link(rest)?;
+        Some(Entry::Page { title, filename })
+    } else {
+        None
+    }
+}
+
+fn split_theme(heading: &str) -> (&str, Option<String>) {
+    match heading
+        .strip_suffix('}')
+        .and_then(|attribute| attribute.rsplit_once("{theme="))
+    {
+        Some((rest, theme)) => (rest.trim_end(), Some(theme.trim().to_string())),
+        None => (heading, None),
+    }
+}
+
+fn split_link(rest: &str) -> Option<(String, String)> {
+    let closing = rest.rfind("](")?;
+    let target = &rest[closing + 2..];
+    let target = target.strip_suffix(')')?;
+
+    if target.is_empty() {
+        None
+    } else {
+        Some((rest[..closing].to_string(), target.to_string()))
+    }
+}
+
+fn parse_meta(text: &str) -> BookMeta {
+    let mut meta = BookMeta::default();
+
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            let value = value.trim().to_string();
+
+            match key.trim() {
+                "title" => meta.title = value,
+                "subtitle" => meta.subtitle = value,
+                "author" => meta.author = value,
+                "theme" => meta.theme = value,
+                "cover" => meta.cover = Some(value),
+                _ => {}
+            }
+        }
+    }
+
+    meta
+}
+
+pub fn serialize(meta: &BookMeta, entries: &[Entry]) -> String {
+    let mut text = serialize_meta(meta);
+    text.push('\n');
+    text.push_str(&serialize_entries(entries));
+    text
+}
+
+fn serialize_meta(meta: &BookMeta) -> String {
+    let mut text = format!(
+        "---\ntitle: {}\nsubtitle: {}\nauthor: {}\ntheme: {}\n",
+        meta.title, meta.subtitle, meta.author, meta.theme
+    );
+
+    if let Some(cover) = &meta.cover {
+        text.push_str(&format!("cover: {cover}\n"));
+    }
+
+    text.push_str("---\n");
+    text
 }
 
 fn serialize_entries(entries: &[Entry]) -> String {
@@ -134,54 +253,6 @@ fn serialize_entries(entries: &[Entry]) -> String {
     text
 }
 
-fn parse_line(line: &str) -> Option<Entry> {
-    if let Some(heading) = line.strip_prefix('#') {
-        let (heading, theme) = split_theme(heading.trim_start_matches('#').trim());
-
-        if let Some(rest) = heading.strip_prefix('[') {
-            let (title, filename) = split_link(rest)?;
-            return Some(Entry::Section { title, filename: Some(filename), theme });
-        }
-
-        return Some(Entry::Section { title: heading.to_string(), filename: None, theme });
-    }
-
-    if let Some(rest) = line.strip_prefix("![") {
-        let (caption, filename) = split_link(rest)?;
-        return Some(Entry::Picture { caption, filename });
-    }
-
-    if let Some(rest) = line.strip_prefix('[') {
-        let (title, filename) = split_link(rest)?;
-        return Some(Entry::Page { title, filename });
-    }
-
-    None
-}
-
-/// A section heading without its trailing `{theme=...}`, and the theme.
-fn split_theme(heading: &str) -> (&str, Option<String>) {
-    if let Some(attribute) = heading.strip_suffix('}') {
-        if let Some((rest, theme)) = attribute.rsplit_once("{theme=") {
-            return (rest.trim_end(), Some(theme.trim().to_string()));
-        }
-    }
-
-    (heading, None)
-}
-
-fn split_link(rest: &str) -> Option<(String, String)> {
-    let closing = rest.rfind("](")?;
-    let target = &rest[closing + 2..];
-    let target = target.strip_suffix(')')?;
-
-    if target.is_empty() {
-        return None;
-    }
-
-    Some((rest[..closing].to_string(), target.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,10 +275,24 @@ mod tests {
         assert_eq!(
             document.entries,
             vec![
-                Entry::Section { title: "Part One".into(), filename: None, theme: None },
-                Entry::Section { title: "Part Two".into(), filename: Some("part-two.md".into()), theme: None },
-                Entry::Page { title: "Getting Started".into(), filename: "getting-started.md".into() },
-                Entry::Picture { caption: "A sunset".into(), filename: "assets/sunset.jpg".into() },
+                Entry::Section {
+                    title: "Part One".into(),
+                    filename: None,
+                    theme: None
+                },
+                Entry::Section {
+                    title: "Part Two".into(),
+                    filename: Some("part-two.md".into()),
+                    theme: None
+                },
+                Entry::Page {
+                    title: "Getting Started".into(),
+                    filename: "getting-started.md".into()
+                },
+                Entry::Picture {
+                    caption: "A sunset".into(),
+                    filename: "assets/sunset.jpg".into()
+                },
             ]
         );
     }
@@ -218,7 +303,10 @@ mod tests {
 
         assert_eq!(
             document.entries,
-            vec![Entry::Page { title: "Arrays [and] slices".into(), filename: "arrays.md".into() }]
+            vec![Entry::Page {
+                title: "Arrays [and] slices".into(),
+                filename: "arrays.md".into()
+            }]
         );
     }
 
@@ -236,14 +324,29 @@ mod tests {
 
     #[test]
     fn reads_a_sections_theme() {
-        let document = parse(&with_meta("# Part One {theme=green}\n# [Part Two](part-two.md) {theme=blue}\n# Sets {and} maps\n")).unwrap();
+        let document = parse(&with_meta(
+            "# Part One {theme=green}\n# [Part Two](part-two.md) {theme=blue}\n# Sets {and} maps\n",
+        ))
+        .unwrap();
 
         assert_eq!(
             document.entries,
             vec![
-                Entry::Section { title: "Part One".into(), filename: None, theme: Some("green".into()) },
-                Entry::Section { title: "Part Two".into(), filename: Some("part-two.md".into()), theme: Some("blue".into()) },
-                Entry::Section { title: "Sets {and} maps".into(), filename: None, theme: None },
+                Entry::Section {
+                    title: "Part One".into(),
+                    filename: None,
+                    theme: Some("green".into())
+                },
+                Entry::Section {
+                    title: "Part Two".into(),
+                    filename: Some("part-two.md".into()),
+                    theme: Some("blue".into())
+                },
+                Entry::Section {
+                    title: "Sets {and} maps".into(),
+                    filename: None,
+                    theme: None
+                },
             ]
         );
     }

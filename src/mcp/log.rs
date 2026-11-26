@@ -1,8 +1,9 @@
 //! Structured logs for `writebook mcp`: one JSON object per line on stderr.
 //!
-//! They say what happened, never who did it or with what. No tokens, IP
+//! They say what happened, not who did it or with what. No tokens, IP
 //! addresses, tool arguments, book contents, or error messages, since a
-//! message can quote a title, a URL or a search.
+//! message can quote a title, a URL or a search. Only events from this
+//! module's own target are written, since rmcp's can quote a request.
 
 use axum::http::Method;
 use serde_json::Value;
@@ -14,7 +15,6 @@ use tracing_subscriber::prelude::*;
 use super::tools;
 use crate::api::{ApiError, TokenRejected};
 
-/// Only these logs are written. rmcp's own can quote a request.
 const TARGET: &str = "writebook::mcp";
 
 pub fn start() {
@@ -51,7 +51,6 @@ pub fn tool_call(tool: &str, outcome: &anyhow::Result<Value>, duration: Duration
     }
 }
 
-/// Why a call failed, in words that can't carry anything a person wrote.
 fn reason(error: &anyhow::Error) -> (&'static str, Option<u16>) {
     if error.downcast_ref::<TokenRejected>().is_some() {
         ("token_rejected", Some(401))

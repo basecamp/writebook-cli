@@ -55,15 +55,12 @@ fn link_into_claude(home: &Path) -> Result<String> {
             }
         }
         Err(_) => {
-            std::os::unix::fs::symlink(&target, &link)
-                .with_context(|| format!("could not link {}", link.display()))?;
+            std::os::unix::fs::symlink(&target, &link).with_context(|| format!("could not link {}", link.display()))?;
             Ok("Linked ~/.claude/skills/writebook → ../../.agents/skills/writebook".to_string())
         }
     }
 }
 
-/// Symlinks need administrator rights or developer mode on Windows, so Claude
-/// Code gets its own copy of the skill there.
 #[cfg(windows)]
 fn link_into_claude(home: &Path) -> Result<String> {
     let skill = home.join(".claude/skills/writebook/SKILL.md");
@@ -75,7 +72,7 @@ fn link_into_claude(home: &Path) -> Result<String> {
     };
 
     if ours {
-        fs::create_dir_all(skill.parent().unwrap())?;
+        fs::create_dir_all(skill.parent().expect("the skill's path is inside ~/.claude/skills"))?;
         fs::write(&skill, SKILL).with_context(|| format!("could not write {}", skill.display()))?;
         Ok("Installed the agent skill for Claude Code to ~/.claude/skills/writebook/SKILL.md".to_string())
     } else {

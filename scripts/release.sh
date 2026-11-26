@@ -132,8 +132,8 @@ info "  Branch: $BRANCH"
 info "  Commit: ${LOCAL:0:7}"
 info "  Tag:    $TAG"
 echo ""
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+bin/dev code lint
+bin/dev test run
 
 next_steps() {
   echo ""

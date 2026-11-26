@@ -12,7 +12,13 @@ pub fn add(name: &str, url: &str) -> Result<()> {
         bail!("remote '{name}' already exists — remove it first with `writebook remote remove {name}`");
     }
 
-    config.remotes.insert(name.to_string(), Remote { url: host.clone(), book_id });
+    config.remotes.insert(
+        name.to_string(),
+        Remote {
+            url: host.clone(),
+            book_id,
+        },
+    );
     checkout.save_config(&config)?;
 
     println!("Added remote '{name}' for book {book_id} on {host}.");
@@ -25,11 +31,10 @@ pub fn list() -> Result<()> {
 
     if config.remotes.is_empty() {
         println!("No remotes. Add one with `writebook remote add origin <book-url>`.");
-        return Ok(());
-    }
-
-    for (name, remote) in &config.remotes {
-        println!("{name}\t{}/{}", remote.url, remote.book_id);
+    } else {
+        for (name, remote) in &config.remotes {
+            println!("{name}\t{}/{}", remote.url, remote.book_id);
+        }
     }
 
     Ok(())
@@ -52,7 +57,9 @@ pub fn remove(name: &str) -> Result<()> {
 /// host and the book id.
 pub fn parse_book_url(url: &str) -> Result<(String, u64)> {
     let target = crate::web::parse_target(url)?;
-    let book_id = target.book_id.with_context(|| format!("'{url}' has no book id — expected something like https://site/4/slug"))?;
+    let book_id = target
+        .book_id
+        .with_context(|| format!("'{url}' has no book id — expected something like https://site/4/slug"))?;
 
     Ok((target.host, book_id))
 }
@@ -74,7 +81,10 @@ mod tests {
         assert!(parse_book_url("https://books.example.com").is_err());
         assert!(parse_book_url("https://books.example.com/not-a-book").is_err());
         assert!(parse_book_url("books.example.com/4").is_err());
-        assert_eq!(parse_book_url("https://Books.Example.com/4").unwrap().0, "https://books.example.com");
+        assert_eq!(
+            parse_book_url("https://Books.Example.com/4").unwrap().0,
+            "https://books.example.com"
+        );
         assert!(parse_book_url("https://me@books.example.com/4").is_err());
     }
 }

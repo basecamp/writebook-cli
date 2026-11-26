@@ -5,9 +5,9 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-pub type Binding = (&'static str, &'static str);
-
 const SEPARATOR: &str = " • ";
+
+pub type Binding = (&'static str, &'static str);
 
 /// The key that shows and hides the rest, at the right end of the bar. It's
 /// dimmed while typing, when ? goes into the text instead.
@@ -46,8 +46,14 @@ pub fn lines(bindings: &[Binding], notice: Option<&str>, width: u16) -> Vec<Line
             used += SEPARATOR.chars().count();
         }
 
-        spans.push(Span::styled(key, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(format!(" {description}"), Style::default().fg(Color::Blue)));
+        spans.push(Span::styled(
+            key,
+            Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {description}"),
+            Style::default().fg(Color::Blue),
+        ));
         used += length;
     }
 
@@ -63,15 +69,29 @@ mod tests {
     use super::*;
 
     fn text(lines: &[Line]) -> Vec<String> {
-        lines.iter().map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect()).collect()
+        lines
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect()
     }
 
     #[test]
     fn puts_chorded_keys_last_and_wraps_to_the_width() {
-        let bindings = [("ctrl+i", "instances"), ("enter", "open"), ("v", "list view"), ("q", "quit")];
+        let bindings = [
+            ("ctrl+i", "instances"),
+            ("enter", "open"),
+            ("v", "list view"),
+            ("q", "quit"),
+        ];
 
-        assert_eq!(text(&lines(&bindings, None, 80)), ["enter open • v list view • q quit • ctrl+i instances"]);
-        assert_eq!(text(&lines(&bindings, None, 30)), ["enter open • v list view", "q quit • ctrl+i instances"]);
+        assert_eq!(
+            text(&lines(&bindings, None, 80)),
+            ["enter open • v list view • q quit • ctrl+i instances"]
+        );
+        assert_eq!(
+            text(&lines(&bindings, None, 30)),
+            ["enter open • v list view", "q quit • ctrl+i instances"]
+        );
     }
 
     #[test]

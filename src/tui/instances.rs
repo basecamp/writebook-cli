@@ -54,7 +54,10 @@ impl InstancePicker {
             Loading::Pending => vec![Line::from("Loading…").dim()],
             Loading::Failed(error) => vec![Line::from(error.clone()).red()],
             Loading::Ready(instances) if instances.is_empty() => {
-                vec![Line::from("No instances yet."), Line::from("Add one with `writebook instance add <url>`.").dim()]
+                vec![
+                    Line::from("No instances yet."),
+                    Line::from("Add one with `writebook instance add <url>`.").dim(),
+                ]
             }
             Loading::Ready(instances) => {
                 let fit = (usize::from(area.height.saturating_sub(4)) / 2).max(1);
@@ -77,10 +80,17 @@ impl InstancePicker {
 
 fn instance_lines(instance: &Instance, chosen: bool) -> [Line<'static>; 2] {
     let marker = if chosen { "› " } else { "  " };
-    let style = if chosen { Style::default().fg(Color::Blue).bold() } else { Style::default().bold() };
+    let style = if chosen {
+        Style::default().fg(Color::Blue).bold()
+    } else {
+        Style::default().bold()
+    };
     let name = Span::styled(format!("{marker}{}", instance.alias), style);
 
-    [Line::from(name), Line::from(format!("  {} · {}", instance.url, instance.status)).dim()]
+    [
+        Line::from(name),
+        Line::from(format!("  {} · {}", instance.url, instance.status)).dim(),
+    ]
 }
 
 #[cfg(test)]
@@ -91,7 +101,11 @@ mod tests {
     #[test]
     fn keeps_the_selected_instance_in_view() {
         let instances: Vec<Instance> = (1..=20)
-            .map(|number| Instance { alias: format!("books{number}"), url: format!("https://books{number}.example.com"), status: "signed in".to_string() })
+            .map(|number| Instance {
+                alias: format!("books{number}"),
+                url: format!("https://books{number}.example.com"),
+                status: "signed in".to_string(),
+            })
             .collect();
         let mut picker = InstancePicker::new(0);
 
@@ -100,7 +114,9 @@ mod tests {
         }
 
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 16)).unwrap();
-        terminal.draw(|frame| picker.draw(frame, frame.area(), &Loading::Ready(instances))).unwrap();
+        terminal
+            .draw(|frame| picker.draw(frame, frame.area(), &Loading::Ready(instances)))
+            .unwrap();
         assert!(views::screen_text(&terminal).iter().any(|it| it.contains("› books20")));
     }
 }

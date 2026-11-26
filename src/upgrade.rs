@@ -20,7 +20,9 @@ pub fn run() -> Result<()> {
 }
 
 fn installed_by_mise(executable: &Path) -> bool {
-    executable.components().any(|component| component.as_os_str() == "github-basecamp-writebook-cli")
+    executable
+        .components()
+        .any(|component| component.as_os_str() == "github-basecamp-writebook-cli")
 }
 
 fn upgrade_with_mise() -> Result<()> {

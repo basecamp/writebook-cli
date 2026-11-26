@@ -107,9 +107,12 @@ Run `writebook --help` for every command.
 
 ## Development
 
+`bin/setup` installs the tools with mise. After that, `bin/dev` runs everything else:
+
 ```sh
-cargo build --release
-cargo test
+bin/dev code lint     # Check the formatting, clippy and the style rules
+bin/dev code review   # Lint, then review the branch against doc/review.md
+bin/dev test run      # Run the tests
 ```
 
 `tests/live.rs` runs against a real Writebook:
@@ -117,7 +120,7 @@ cargo test
 ```sh
 docker run -d --name writebook -p 3000:80 -e SECRET_KEY_BASE=$(openssl rand -hex 64) -e DISABLE_SSL=1 ghcr.io/basecamp/writebook:main
 docker exec -i writebook bin/rails runner - < tests/support/seed.rb
-WRITEBOOK_LIVE_URL=http://localhost:3000 cargo test --test live
+WRITEBOOK_LIVE_URL=http://localhost:3000 bin/dev test run
 ```
 
 To publish a release, see [RELEASING.md](RELEASING.md).

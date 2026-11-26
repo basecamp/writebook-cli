@@ -3,6 +3,9 @@ name = "writebook-cli"
 version = "0.3.0"
 edition = "2024"
 
+[workspace]
+members = [".", "crates/writebook-dev"]
+
 [[bin]]
 name = "writebook"
 path = "src/main.rs"
@@ -39,12 +42,18 @@ usage = { version = "6", package = "usage-rs", features = ["completions"] }
 [target.'cfg(unix)'.dependencies]
 sigpipe = "0.1"
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-# The code reads better with these, so CI's `cargo clippy -D warnings`
-# leaves them alone.
-[lints.clippy]
+# The code reads better with these, so `bin/dev code lint` leaves them alone.
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
 collapsible_if = "allow"
 collapsible_match = "allow"
+let_underscore_must_use = "deny"
 too_many_arguments = "allow"
+unused_result_ok = "deny"
+unwrap_used = "deny"

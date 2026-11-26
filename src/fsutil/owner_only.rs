@@ -20,31 +20,41 @@ pub fn restrict(path: &Path) -> Result<()> {
 }
 
 fn icacls(path: &Path, args: &[&str]) -> Result<()> {
-    let output = Command::new("icacls").arg(path).args(args).output().context("could not run icacls")?;
+    let output = Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .context("could not run icacls")?;
 
     if output.status.success() {
         Ok(())
     } else {
-        bail!("could not restrict {} to the current user: {}", path.display(), String::from_utf8_lossy(&output.stdout).trim())
+        bail!(
+            "could not restrict {} to the current user: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stdout).trim()
+        )
     }
 }
 
-/// The signed-in user's SID, as in S-1-5-21-…, from whoami's
-/// `"name","sid"` line.
 fn current_user() -> Result<&'static str> {
     static USER: OnceLock<String> = OnceLock::new();
 
-    if let Some(user) = USER.get() {
-        return Ok(user);
-    }
+    match USER.get() {
+        Some(user) => Ok(user),
+        None => {
+            let output = Command::new("whoami")
+                .args(["/user", "/fo", "csv", "/nh"])
+                .output()
+                .context("could not run whoami")?;
+            let line = String::from_utf8_lossy(&output.stdout);
+            let sid = line.trim().rsplit(',').next().unwrap_or_default().trim_matches('"');
 
-    let output = Command::new("whoami").args(["/user", "/fo", "csv", "/nh"]).output().context("could not run whoami")?;
-    let line = String::from_utf8_lossy(&output.stdout);
-    let sid = line.trim().rsplit(',').next().unwrap_or_default().trim_matches('"');
-
-    if output.status.success() && sid.starts_with("S-") {
-        Ok(USER.get_or_init(|| sid.to_string()))
-    } else {
-        bail!("could not look up the current user")
+            if output.status.success() && sid.starts_with("S-") {
+                Ok(USER.get_or_init(|| sid.to_string()))
+            } else {
+                bail!("could not look up the current user")
+            }
+        }
     }
 }

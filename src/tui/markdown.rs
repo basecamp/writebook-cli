@@ -7,6 +7,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Writebook's code color, and its heading color.
+pub const CODE: Color = Color::Yellow;
+pub const HEADING: Color = Color::Cyan;
+
 /// How tall an image in a page is drawn.
 pub const IMAGE_HEIGHT: u16 = 14;
 
@@ -16,7 +20,10 @@ pub enum Row {
 }
 
 pub fn render(markdown: &str, width: u16) -> Vec<Row> {
-    let mut renderer = Renderer { width: usize::from(width.max(10)), ..Renderer::default() };
+    let mut renderer = Renderer {
+        width: usize::from(width.max(10)),
+        ..Renderer::default()
+    };
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
 
     for event in Parser::new_ext(markdown, options) {
@@ -30,20 +37,13 @@ pub fn render(markdown: &str, width: u16) -> Vec<Row> {
     renderer.rows
 }
 
-/// Writebook's code color, and its heading color.
-pub const CODE: Color = Color::Yellow;
-pub const HEADING: Color = Color::Cyan;
-
 #[derive(Default)]
 struct Renderer {
     width: usize,
     rows: Vec<Row>,
     spans: Vec<Span<'static>>,
     styles: Vec<Style>,
-    /// What starts each line of the current block: list indents, quote bars.
     prefixes: Vec<String>,
-    /// The bullets for the next line, each in place of its item's prefix,
-    /// by the prefix's position.
     bullets: Vec<(usize, String)>,
     lists: Vec<Option<u64>>,
     code_block: bool,
@@ -61,7 +61,10 @@ impl Renderer {
 
                 for line in text.lines() {
                     for piece in pieces(line, room) {
-                        self.rows.push(Row::Text(Line::from(vec![Span::raw(prefix.clone()), Span::styled(piece.to_string(), Style::default().fg(CODE))])));
+                        self.rows.push(Row::Text(Line::from(vec![
+                            Span::raw(prefix.clone()),
+                            Span::styled(piece.to_string(), Style::default().fg(CODE)),
+                        ])));
                     }
                 }
             }
@@ -72,7 +75,10 @@ impl Renderer {
             Event::HardBreak => self.flush(),
             Event::Rule => {
                 self.flush();
-                self.rows.push(Row::Text(Line::styled("─".repeat(self.width.min(40)), Style::default().fg(Color::DarkGray))));
+                self.rows.push(Row::Text(Line::styled(
+                    "─".repeat(self.width.min(40)),
+                    Style::default().fg(Color::DarkGray),
+                )));
                 self.blank();
             }
             Event::TaskListMarker(done) => self.push(if done { "[x] " } else { "[ ] " }),
@@ -86,7 +92,11 @@ impl Renderer {
             Tag::Heading { level, .. } => {
                 self.flush();
                 let style = Style::default().fg(HEADING).add_modifier(Modifier::BOLD);
-                let style = if level == HeadingLevel::H1 { style.add_modifier(Modifier::UNDERLINED) } else { style };
+                let style = if level == HeadingLevel::H1 {
+                    style.add_modifier(Modifier::UNDERLINED)
+                } else {
+                    style
+                };
                 self.styles.push(style);
             }
             Tag::Paragraph => self.flush(),
@@ -100,7 +110,10 @@ impl Renderer {
                 if let CodeBlockKind::Fenced(language) = kind
                     && !language.is_empty()
                 {
-                    self.rows.push(Row::Text(Line::styled(format!("{}  {language}", self.prefixes.concat()), Style::default().fg(Color::DarkGray))));
+                    self.rows.push(Row::Text(Line::styled(
+                        format!("{}  {language}", self.prefixes.concat()),
+                        Style::default().fg(Color::DarkGray),
+                    )));
                 }
             }
             Tag::List(start) => {
@@ -123,11 +136,15 @@ impl Renderer {
             Tag::Emphasis => self.styles.push(self.style().add_modifier(Modifier::ITALIC)),
             Tag::Strong => self.styles.push(self.style().add_modifier(Modifier::BOLD)),
             Tag::Strikethrough => self.styles.push(self.style().add_modifier(Modifier::CROSSED_OUT)),
-            Tag::Link { .. } => self.styles.push(self.style().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)),
+            Tag::Link { .. } => self
+                .styles
+                .push(self.style().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)),
             Tag::Image { dest_url, .. } => self.image = Some(dest_url.to_string()),
             Tag::Table(_) => self.flush(),
             Tag::TableHead => self.styles.push(self.style().add_modifier(Modifier::BOLD)),
-            Tag::TableCell if !self.spans.is_empty() => self.spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray))),
+            Tag::TableCell if !self.spans.is_empty() => self
+                .spans
+                .push(Span::styled(" │ ", Style::default().fg(Color::DarkGray))),
             _ => {}
         }
     }
@@ -189,8 +206,6 @@ impl Renderer {
         }
     }
 
-    /// An empty item, or one with only a picture, never gets to show its
-    /// bullet, which would otherwise wait for a line it has no prefix for.
     fn drop_bullets_deeper_than(&mut self, depth: usize) {
         self.bullets.retain(|(position, _)| *position < depth);
     }
@@ -209,7 +224,6 @@ impl Renderer {
         }
     }
 
-    /// Wrap what's gathered into lines of the width, the prefixes in front.
     fn flush(&mut self) {
         if self.spans.is_empty() {
             return;
@@ -268,7 +282,6 @@ pub fn wrap(spans: Vec<Span<'static>>, width: usize, first: &str, rest: &str) ->
     lines
 }
 
-/// A word in pieces no wider than the room, or whole when it fits.
 fn pieces(word: &str, room: usize) -> Vec<&str> {
     let mut pieces = Vec::new();
     let mut start = 0;
@@ -290,7 +303,6 @@ fn pieces(word: &str, room: usize) -> Vec<&str> {
     pieces
 }
 
-/// Words with the spaces after them, so wrapping keeps the spacing.
 fn split_keeping_spaces(text: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -313,6 +325,13 @@ fn split_keeping_spaces(text: &str) -> Vec<&str> {
 mod tests {
     use super::*;
 
+    fn text_line(row: &Row) -> &Line<'static> {
+        match row {
+            Row::Text(line) => line,
+            Row::Image { .. } => panic!("a line"),
+        }
+    }
+
     fn text(rows: &[Row]) -> Vec<String> {
         rows.iter()
             .map(|row| match row {
@@ -331,7 +350,10 @@ mod tests {
 
     #[test]
     fn renders_blocks_and_wraps_paragraphs_to_the_width() {
-        let rows = render("# On call\n\nPage the person on call when the site is down.\n\n- First\n- Second\n\n![Diagram](/u/diagram-ab12.png)\n\n> Quoted", 24);
+        let rows = render(
+            "# On call\n\nPage the person on call when the site is down.\n\n- First\n- Second\n\n![Diagram](/u/diagram-ab12.png)\n\n> Quoted",
+            24,
+        );
 
         assert_eq!(
             text(&rows),
@@ -353,43 +375,73 @@ mod tests {
 
     #[test]
     fn puts_the_bullets_of_nested_items_and_quotes_in_items_on_their_first_line() {
-        assert_eq!(text(&render("- > Quoted in a list\n  > still quoted", 40)), ["• │ Quoted in a list still quoted"]);
-        assert_eq!(text(&render("- - inner\n  - next\n- outer", 40)), ["• • inner", "   • next", "• outer"]);
-        assert_eq!(text(&render("1. > a quote that wraps here", 14)), ["1. │ a quote ", "   │ that ", "   │ wraps ", "   │ here"]);
+        assert_eq!(
+            text(&render("- > Quoted in a list\n  > still quoted", 40)),
+            ["• │ Quoted in a list still quoted"]
+        );
+        assert_eq!(
+            text(&render("- - inner\n  - next\n- outer", 40)),
+            ["• • inner", "   • next", "• outer"]
+        );
+        assert_eq!(
+            text(&render("1. > a quote that wraps here", 14)),
+            ["1. │ a quote ", "   │ that ", "   │ wraps ", "   │ here"]
+        );
     }
 
     #[test]
     fn an_empty_item_or_one_with_only_a_picture_leaves_no_bullet_behind() {
         assert_eq!(text(&render("- \n\nAfter", 40)), ["", "After"]);
-        assert_eq!(text(&render("- ![a](/u/a.png)\n\nAfter", 40)), ["[image /u/a.png]", "", "After"]);
+        assert_eq!(
+            text(&render("- ![a](/u/a.png)\n\nAfter", 40)),
+            ["[image /u/a.png]", "", "After"]
+        );
         assert_eq!(text(&render("- one\n-\n\nAfter", 40)), ["• one", "", "After"]);
     }
 
     #[test]
     fn wraps_by_the_width_on_screen_and_breaks_words_too_long_for_a_line() {
-        assert_eq!(text(&render("日本語のテキスト です", 10)), ["日本語のテ", "キスト ", "です"]);
-        assert_eq!(text(&render("see https://example.com/a/very/long/path ok", 12)), ["see ", "https://exam", "ple.com/a/ve", "ry/long/path", "ok"]);
+        assert_eq!(
+            text(&render("日本語のテキスト です", 10)),
+            ["日本語のテ", "キスト ", "です"]
+        );
+        assert_eq!(
+            text(&render("see https://example.com/a/very/long/path ok", 12)),
+            ["see ", "https://exam", "ple.com/a/ve", "ry/long/path", "ok"]
+        );
 
         let rows = render("- **abcdefghijklmnop**", 10);
         assert_eq!(text(&rows), ["• abcdefg", "   hijklmn", "   op"]);
-        let Row::Text(line) = &rows[1] else { panic!("a line") };
+        let line = text_line(&rows[1]);
         assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn renders_a_table_a_row_to_a_line_with_its_cells_apart() {
-        let rows = render("| Name | Role |\n|------|------|\n| Ann | Editor |\n| Bob | Reader |\n\nAfter", 40);
+        let rows = render(
+            "| Name | Role |\n|------|------|\n| Ann | Editor |\n| Bob | Reader |\n\nAfter",
+            40,
+        );
 
-        assert_eq!(text(&rows), ["Name │ Role", "Ann │ Editor", "Bob │ Reader", "", "After"]);
-        let Row::Text(head) = &rows[0] else { panic!("a line") };
+        assert_eq!(
+            text(&rows),
+            ["Name │ Role", "Ann │ Editor", "Bob │ Reader", "", "After"]
+        );
+        let head = text_line(&rows[0]);
         assert!(head.spans[1].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn styles_emphasis_code_and_links_without_their_markers() {
         let rows = render("Some **bold**, *italic*, `code` and a [link](https://example.com).", 80);
-        let Row::Text(line) = &rows[0] else { panic!("a line") };
-        let style_of = |word: &str| line.spans.iter().find(|it| it.content == word).map(|it| it.style).unwrap();
+        let line = text_line(&rows[0]);
+        let style_of = |word: &str| {
+            line.spans
+                .iter()
+                .find(|it| it.content == word)
+                .map(|it| it.style)
+                .unwrap()
+        };
 
         assert_eq!(text(&rows), ["Some bold, italic, code and a link."]);
         assert!(style_of("bold").add_modifier.contains(Modifier::BOLD));

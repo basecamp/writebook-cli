@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Sets a machine up to work on writebook-cli: the Rust and the tools from mise.toml.
+#
+# `--quiet` is for bin/dev, which runs this every time to be sure the machine is ready: the
+# work is the same, and what goes is the welcome.
+set -eo pipefail
+
+cd "$(dirname "$0")/.."
+
+quiet=no
+for argument in "$@"; do
+  case "$argument" in
+    --quiet) quiet=yes ;;
+    *)
+      echo "bin/setup: unknown argument $argument" >&2
+      exit 1
+      ;;
+  esac
+done
+
+PURPLE="#7047fb"
+MINT="#5ceace"
+CORAL="#ec8580"
+
+# gum is installed by mise a step below, so on a fresh machine there isn't one yet, and plain
+# text is what that looks like. `--background ""` because gum reads a bare BACKGROUND from the
+# environment.
+tint() {
+  if command -v gum > /dev/null 2>&1; then
+    gum style --foreground "$1" --background "" "$2"
+  else
+    echo "$2"
+  fi
+}
+
+note() {
+  if [ "$quiet" = no ]; then
+    tint "$1" "$2"
+  fi
+}
+
+# Quietly means quietly when it works and in full when it doesn't.
+step() {
+  note "$PURPLE" "▸ $1"
+  shift
+  local output
+  if [ "$quiet" = no ]; then
+    "$@"
+    echo
+  elif ! output=$("$@" 2>&1); then
+    echo "$output"
+    return 1
+  fi
+}
+
+if ! command -v mise &> /dev/null; then
+  tint "$CORAL" "bin/setup needs mise: install it from your package manager, or with 'curl https://mise.run | sh'."
+  exit 1
+fi
+
+step "Trusting the mise config" mise trust --yes
+step "Installing the tools" mise install --yes
+
+note "$MINT" "✓ Ready"
+if [ "$quiet" = no ]; then
+  echo "  bin/dev lists what you can run"
+fi
