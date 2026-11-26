@@ -103,6 +103,8 @@ the user. It fails, and the error message says which command to run.
 If you only need to read books, add `--read-only` in step 1. The sign-in can
 read books but can't change them, so `push` fails. The approval page tells
 the user that the device will only be able to read.
+In `writebook tui`, creating a book needs a sign-in that can write: a
+read-only one isn't offered "new book".
 
 ### Tokens
 

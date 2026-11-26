@@ -48,8 +48,9 @@ Don't weaken, skip, ignore or delete a test, case or assertion to make the chang
 #### TEST-2: No test depends on time
 
 A test checks what happened, never how long it took. No sleeping for something to happen, no
-limits on elapsed time, no race against a timeout. A deadline is allowed only as a hang guard of
-a minute or more, on a wait for a state, as `eventually`'s is.
+limits on elapsed time, no race against a timeout. A fake server's route may hold or delay its
+answer to stand in for a slow server, while the test itself still waits on a state. A deadline is
+allowed only as a hang guard of a minute or more, on a wait for a state, as `eventually`'s is.
 
 #### TEST-3: Tests check behavior through the public surface
 
