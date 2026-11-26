@@ -57,3 +57,6 @@ fn takes_a_guard(expression: &Expr) -> Option<String> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

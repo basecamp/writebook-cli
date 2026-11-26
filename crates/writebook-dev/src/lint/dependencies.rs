@@ -27,3 +27,6 @@ pub(super) fn no_crate_takes_a_mocking_library() -> Option<Refusal> {
          socket",
     )
 }
+
+#[cfg(test)]
+mod tests;

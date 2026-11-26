@@ -30,3 +30,28 @@ fn a_test_may_not_read_a_clock_even_in_a_route() {
         ["tests/a.rs:2: elapsed", "tests/a.rs:3: elapsed"]
     );
 }
+
+#[test]
+fn an_inline_tests_module_over_two_hundred_lines_has_its_own_file() {
+    let long = format!(
+        "fn app() {{}}\n\n#[cfg(test)]\nmod tests {{\n{}}}\n",
+        "    fn a() {}\n".repeat(198)
+    );
+    let short = format!(
+        "fn app() {{}}\n\n#[cfg(test)]\nmod tests {{\n{}}}\n",
+        "    fn a() {}\n".repeat(197)
+    );
+    let not_tests = format!("mod parts {{\n{}}}\n", "    fn a() {}\n".repeat(300));
+
+    assert_eq!(
+        violations(
+            &[
+                ("src/long.rs", &long),
+                ("src/short.rs", &short),
+                ("src/parts.rs", &not_tests)
+            ],
+            a_long_tests_module_has_its_own_file
+        ),
+        ["src/long.rs:4: 201 lines"]
+    );
+}

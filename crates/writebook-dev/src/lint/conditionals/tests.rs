@@ -32,3 +32,24 @@ fn a_guard_clause_is_only_allowed_as_the_first_statement_of_a_function() {
         ["src/a.rs:7: a guard clause", "src/a.rs:14: a guard clause"]
     );
 }
+
+#[test]
+fn a_combinator_chain_may_not_pick_between_two_values() {
+    let source = "fn pick(name: Option<&str>, empty: bool) -> usize {
+             let length = name.map(str::len).unwrap_or(0);
+             let shown = empty.then(|| 0).unwrap_or_else(|| 1);
+             let some = empty.then_some(0).unwrap_or(1);
+             let first = name.and_then(|it| it.chars().next()).unwrap_or('-');
+             let plain = name.unwrap_or(\"\");
+             if let Some(name) = name { name.len() } else { 0 }
+         }";
+
+    assert_eq!(
+        violations(&[("src/a.rs", source)], no_combinator_chain_stands_in_for_a_branch),
+        [
+            "src/a.rs:2: .map(..).unwrap_or(..)",
+            "src/a.rs:3: .then(..).unwrap_or_else(..)",
+            "src/a.rs:4: .then_some(..).unwrap_or(..)",
+        ]
+    );
+}
