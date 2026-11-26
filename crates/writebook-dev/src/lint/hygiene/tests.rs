@@ -24,7 +24,7 @@ fn an_integration_test_must_say_it_is_test_code() {
 
 #[test]
 fn every_crate_must_take_the_workspace_lints() {
-    let workspace = "[workspace]\nmembers = [\"a\", \"b\", \"c\", \"d\", \"e\"]\nresolver = \"3\"\n\n[workspace.lints.rust]\nunsafe_code = \"forbid\"\n";
+    let workspace = "[workspace]\nmembers = [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"]\nresolver = \"3\"\n\n[workspace.lints.rust]\nunsafe_code = \"forbid\"\n";
     let package = |name: &str, tail: &str| {
         format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n{tail}")
     };
@@ -33,6 +33,7 @@ fn every_crate_must_take_the_workspace_lints() {
     let c = package("c", "\n[lints]\n# why\nworkspace = true\n");
     let d = package("d", "");
     let e = package("e", "\n[lints.rust]\nunsafe_code = \"allow\"\n");
+    let f = format!("lints.workspace = true\n\n{}", package("f", ""));
     let files = [
         ("Cargo.toml", workspace),
         ("a/Cargo.toml", &a),
@@ -45,7 +46,12 @@ fn every_crate_must_take_the_workspace_lints() {
         ("d/src/lib.rs", ""),
         ("e/Cargo.toml", &e),
         ("e/src/lib.rs", ""),
+        ("f/Cargo.toml", &f),
+        ("f/src/lib.rs", ""),
     ];
 
-    assert_eq!(violations(&files, every_crate_takes_the_workspace_lints), ["d", "e"]);
+    assert_eq!(
+        violations(&files, every_crate_takes_the_workspace_lints),
+        ["b", "d", "e"]
+    );
 }

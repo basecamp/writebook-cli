@@ -171,17 +171,14 @@ fn says_it_is_test_code(root: &str) -> bool {
 }
 
 fn takes_the_workspace_lints(manifest: &str) -> bool {
-    let mut in_lints = false;
-    for line in manifest.lines().map(str::trim) {
-        if line == "lints.workspace = true" {
-            return true;
-        } else if line.starts_with('[') {
-            in_lints = line == "[lints]";
-        } else if in_lints && line == "workspace = true" {
-            return true;
-        }
-    }
-    false
+    let manifest: toml::Table = manifest
+        .parse()
+        .expect("cargo metadata read this manifest, so it parses");
+    manifest
+        .get("lints")
+        .and_then(|lints| lints.get("workspace"))
+        .and_then(toml::Value::as_bool)
+        == Some(true)
 }
 
 #[cfg(test)]
